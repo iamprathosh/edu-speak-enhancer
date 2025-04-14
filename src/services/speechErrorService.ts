@@ -1,3 +1,4 @@
+import { getApiUrl } from './backendConfig';
 
 // Mock data for speech error analysis
 interface SpeechError {
@@ -23,31 +24,20 @@ export const practiceSentences = [
 ];
 
 // Simulate processing speech with errors
-export const analyzeErrors = (recordingBlob: Blob): Promise<SpeechErrorAnalysis> => {
-  return new Promise((resolve) => {
-    // Simulate backend processing time
-    setTimeout(() => {
-      // In real implementation, this would analyze the audio and detect errors
-      resolve({
-        sentence: "The beautiful mountain range was visible from the kitchen window.",
-        errorWords: ["mountain", "visible"],
-        errors: {
-          "mountain": {
-            word: "mountain",
-            correctPronunciation: "/ˈmaʊntən/ (moun-tuhn)",
-            userPronunciation: "/ˈmaʊnteɪn/ (moun-tayn)",
-            explanation: "The second syllable should be a schwa sound (ə), not a long \"a\" sound."
-          },
-          "visible": {
-            word: "visible",
-            correctPronunciation: "/ˈvɪzəbəl/ (viz-uh-buhl)",
-            userPronunciation: "/ˈvɪsəbəl/ (vis-uh-buhl)",
-            explanation: "The \"s\" in \"visible\" should be pronounced as a \"z\" sound."
-          }
-        }
-      });
-    }, 1500);
+export const analyzeErrors = async (recordingBlob: Blob): Promise<SpeechErrorAnalysis> => {
+  const formData = new FormData();
+  formData.append('audio', recordingBlob);
+
+  const response = await fetch(getApiUrl('/api/speech-error-analysis'), {
+    method: 'POST',
+    body: formData,
   });
+
+  if (!response.ok) {
+    throw new Error(`Speech error analysis API error: ${response.status}`);
+  }
+
+  return await response.json();
 };
 
 // Simulate text-to-speech functionality for correct pronunciation

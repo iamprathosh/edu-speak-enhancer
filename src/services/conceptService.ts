@@ -1,3 +1,5 @@
+import { getApiUrl } from './backendConfig';
+
 // Mock data for concept summarization
 export interface SummarizedConcept {
   summary: string;
@@ -26,7 +28,7 @@ Factors affecting the rate of photosynthesis include light intensity, carbon dio
 export const summarizeConcept = (text: string, level: CompressionLevel): Promise<SummarizedConcept> => {
   return new Promise((resolve, reject) => {
     // Call the backend API
-    fetch('http://localhost:5000/api/summarize', {
+    fetch(getApiUrl('/api/summarize'), {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',

@@ -404,7 +404,7 @@ def generate_summary(text, level):
 
         words = word_tokenize(text.lower())
         stop_words = set(stopwords.words('english'))
-        words = [word for word in words if word.isalnum() and word not in stop_words]
+        words = [word for word in words if word is not None and word.isalnum() and word not in stop_words]
         if not words:
              logger.warning("No significant words found after filtering")
              return "Content lacks significant terms for summarization."
@@ -414,7 +414,7 @@ def generate_summary(text, level):
         sentence_scores = {}
         for i, sentence in enumerate(sentences):
             sentence_words = word_tokenize(sentence.lower())
-            sentence_words = [word for word in sentence_words if word.isalnum() and word not in stop_words]
+            sentence_words = [word for word in sentence_words if word isalnum() and word not in stop_words]
             if len(sentence_words) == 0:
                 continue
 
