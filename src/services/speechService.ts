@@ -1,3 +1,5 @@
+import { getApiUrl } from './backendConfig';
+
 // Mock data for speech analysis
 interface SpeechFeedback {
   pronunciation: number;
@@ -142,3 +144,31 @@ export const googleVoices = [
   { id: 'en-IN-Wavenet-A', name: 'Wavenet A', accent: 'Indian', gender: 'Female' },
   { id: 'en-IN-Wavenet-B', name: 'Wavenet B', accent: 'Indian', gender: 'Male' },
 ];
+
+/**
+ * Function to call the backend API for text-to-speech
+ * @param {string} text - The text to convert to speech
+ * @param {string} voiceId - The voice ID to use for speech synthesis
+ * @param {number} speed - The speed of the speech
+ * @returns {Promise<ArrayBuffer>} - The audio content as an ArrayBuffer
+ */
+export const callTextToSpeechAPI = async (text: string, voiceId: string, speed: number): Promise<ArrayBuffer> => {
+  try {
+    const response = await fetch(getApiUrl('/api/tts'), {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ text, voiceId, speed }),
+    });
+
+    if (!response.ok) {
+      throw new Error(`TTS API error: ${response.status}`);
+    }
+
+    return await response.arrayBuffer();
+  } catch (error) {
+    console.error('Error calling TTS API:', error);
+    throw error;
+  }
+};
