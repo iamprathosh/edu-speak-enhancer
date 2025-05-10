@@ -132,7 +132,7 @@ export const getGoogleTTSAudio = async (text: string, voiceId: string, speed: nu
   }
 };
 
-// Get audio from custom gTTS and googletrans backend
+// Get audio from custom Google Cloud TTS and googletrans backend
 export const getCustomTTSAudio = async (text: string): Promise<string> => {
   try {
     console.log('getCustomTTSAudio called with text:', text);

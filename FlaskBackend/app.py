@@ -3,7 +3,7 @@ import os
 import logging
 from flask import Flask, request, jsonify, send_file
 from flask_cors import CORS
-from google.cloud import texttospeech , speech , vision  # Added speech and vision
+from google.cloud import texttospeech, speech, vision
 from google.api_core import exceptions
 import io
 from dotenv import load_dotenv
@@ -24,7 +24,6 @@ from werkzeug.utils import secure_filename
 import language_tool_python  # Added for grammar check
 import uuid  # Added for generating unique IDs
 import base64
-from gtts import gTTS
 from googletrans import Translator
 
 # --- Configuration and Initialization (Same as previous, with additions) ---
@@ -132,8 +131,8 @@ def download_nltk_resources():
     except LookupError:
         logger.info("Downloading NLTK wordnet")
         nltk.download('wordnet', quiet=True)
-    # Add gTTS and googletrans resource check if necessary, though they usually don't require explicit download like nltk
-    logger.info("gTTS and googletrans are assumed to be installed via pip.")
+    # Googletrans resource check if necessary, though they usually don't require explicit download like nltk
+    logger.info("Googletrans is assumed to be installed via pip.")
 
 
 download_nltk_resources()
@@ -225,7 +224,7 @@ def text_to_speech_google(): # Renamed to avoid conflict
         logger.info(f"TTS parameters - Text length: {len(text)}, Voice ID: {voice_id}")
 
         try:
-            speed = float(data.get('speed', 1.0))
+            speed = float(data.get('speed', 2.0))
             if speed < 0.25 or speed > 4.0:
                 logger.warning(f"Speed value out of range: {speed}. Received: {data.get('speed')}")
                 return jsonify({'error': 'Speed must be between 0.25 and 4.0'}), 400
@@ -295,11 +294,15 @@ def text_to_speech_google(): # Renamed to avoid conflict
 @app.route('/api/texttospeech', methods=['POST'])
 @limiter.limit("10 per minute")
 def text_to_speech_custom():
-    logger.info("Received request for /api/texttospeech (Custom gTTS)")
+    logger.info("Received request for /api/texttospeech (Multi-language TTS)")
     # Log the request headers for debugging
     logger.info(f"Request headers: {dict(request.headers)}")
     
     try:
+        if tts_client is None:
+            logger.error("Google Cloud TTS client not initialized")
+            return jsonify({'error': 'Text-to-speech service unavailable'}), 503
+            
         data = request.get_json()
         logger.info(f"Received custom TTS request data: {data}")
 
@@ -318,41 +321,90 @@ def text_to_speech_custom():
         
         # Create an in-memory bytes buffer for the MP3 data
         mp3_fp = io.BytesIO()
-        words_processed = 0
+        
+        # Group words by language for better performance
+        current_lang = None
+        current_group = []
+        lang_groups = []
         
         for word in words:
-            if not word.strip(): # Skip empty strings that might result from multiple spaces
+            if not word.strip():  # Skip empty strings
                 continue
                 
+            detected_lang = detect_language_for_word(word)
+            
+            # If language changes or this is the first word, start a new group
+            if detected_lang != current_lang:
+                if current_group:
+                    lang_groups.append((current_lang, ' '.join(current_group)))
+                current_lang = detected_lang
+                current_group = [word]
+            else:
+                current_group.append(word)
+        
+        # Add the last group if it exists
+        if current_group:
+            lang_groups.append((current_lang, ' '.join(current_group)))
+        
+        logger.info(f"Grouped text into {len(lang_groups)} language segments")
+        groups_processed = 0
+        
+        # Map language codes to ones supported by Google Cloud TTS
+        lang_code_map = {
+            'en': 'en-US',
+            'fr': 'fr-FR',
+            'es': 'es-ES',
+            'de': 'de-DE'
+        }
+        
+        for lang, text_segment in lang_groups:
             try:
-                # Detect the language of the word
-                detected_lang = detect_language_for_word(word)
-                logger.info(f"Processing word: '{word}', Detected language: {detected_lang}")
+                google_lang_code = lang_code_map.get(lang, 'en-US')
                 
-                # Generate speech for this word using gTTS
-                tts_word = gTTS(text=word, lang=detected_lang, slow=False)
+                # Use Google Cloud TTS to synthesize speech for the entire segment
+                synthesis_input = texttospeech.SynthesisInput(text=text_segment)
                 
-                # Write the audio to our buffer
-                tts_word.write_to_fp(mp3_fp)
-                words_processed += 1
+                # Select a voice appropriate for the language
+                voice = texttospeech.VoiceSelectionParams(
+                    language_code=google_lang_code,
+                    ssml_gender=texttospeech.SsmlVoiceGender.NEUTRAL
+                )
                 
+                # Configure audio settings
+                audio_config = texttospeech.AudioConfig(
+                    audio_encoding=texttospeech.AudioEncoding.MP3
+                )
+                
+                # Make the API call for the whole segment
+                logger.info(f"Calling Google TTS API for segment in language {google_lang_code}: '{text_segment[:50]}...'")
+                response = tts_client.synthesize_speech(
+                    input=synthesis_input,
+                    voice=voice,
+                    audio_config=audio_config
+                )
+                
+                # Write the audio content to our buffer
+                mp3_fp.write(response.audio_content)
+                groups_processed += 1
+                
+            except exceptions.GoogleAPICallError as e:
+                logger.error(f"Google API call error for segment '{text_segment[:50]}...': {str(e)}")
+                if groups_processed == 0:
+                    return jsonify({'error': f'Text-to-speech API error: {str(e)}'}), 500
+                continue
             except Exception as e:
-                logger.error(f"Error generating TTS for word '{word}' with lang '{detected_lang}': {e}")
-                # Log the full stack trace for debugging
+                logger.error(f"Error generating TTS for segment in lang '{lang}': {e}")
                 logger.error(traceback.format_exc())
                 
-                # If this is the first word and we fail, we should return an error
-                if words_processed == 0:
-                    return jsonify({'error': f'Failed to generate speech for word: {word}. Error: {str(e)}'}), 500
-                
-                # Otherwise, we'll just skip this word and continue with the rest
-                logger.warning(f"Skipping word '{word}' and continuing with the rest of the text")
+                if groups_processed == 0:
+                    return jsonify({'error': f'Failed to generate speech. Error: {str(e)}'}), 500
+                logger.warning(f"Skipping segment and continuing with the rest of the text")
                 continue
         
-        # If we haven't processed any words successfully, return an error
-        if words_processed == 0:
-            logger.error("No words were successfully processed")
-            return jsonify({'error': 'Failed to generate speech for any words in the text'}), 500
+        # If we haven't processed any groups successfully, return an error
+        if groups_processed == 0:
+            logger.error("No language segments were successfully processed")
+            return jsonify({'error': 'Failed to generate speech for any parts of the text'}), 500
         
         # Rewind the buffer to the beginning to read the data
         mp3_fp.seek(0)
@@ -361,7 +413,7 @@ def text_to_speech_custom():
         # Encode the audio data to base64
         audio_base64 = base64.b64encode(audio_bytes).decode('utf-8')
         
-        logger.info(f"Successfully generated and encoded custom TTS audio, size: {len(audio_base64)} bytes")
+        logger.info(f"Successfully generated and encoded multi-language TTS audio, size: {len(audio_base64)} bytes")
         response = jsonify({'audio_base64': audio_base64})
         
         # Log the response headers for debugging

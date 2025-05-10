@@ -8,5 +8,5 @@ nltk
 google-generativeai
 Flask-Limiter
 Werkzeug
-gTTS
 googletrans
+language-tool-python

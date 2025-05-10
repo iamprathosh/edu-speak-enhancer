@@ -13,7 +13,7 @@ import base64
 import json
 import requests
 import traceback
-from gtts import gTTS
+from google.cloud import texttospeech
 
 # Configuration
 API_URL = "http://localhost:5000"
@@ -87,19 +87,48 @@ def test_custom_tts_api():
             print(f"✗ Exception occurred during API call: {e}")
             traceback.print_exc()
 
-# Generate test audio files directly with gTTS for comparison
+# Generate test audio files directly with Google Cloud TTS for comparison
 def generate_comparison_audio():
-    """Generate audio files directly with gTTS for comparison."""
-    print("\n=== Generating Comparison Audio with gTTS ===")
+    """Generate audio files directly with Google Cloud TTS for comparison."""
+    print("\n=== Generating Comparison Audio with Google Cloud TTS ===")
+    
+    # Initialize Google Cloud TTS client
+    try:
+        tts_client = texttospeech.TextToSpeechClient()
+        print("✓ Google Cloud TTS client initialized")
+    except Exception as e:
+        print(f"✗ Failed to initialize Google Cloud TTS client: {e}")
+        return
     
     for i, phrase in enumerate(TEST_PHRASES, 1):
         print(f"\nPhrase {i}: '{phrase}'")
         
         try:
-            # Without language detection (using 'en' for all)
-            tts_en = gTTS(text=phrase, lang='en', slow=False)
+            # Create input for Google Cloud TTS
+            synthesis_input = texttospeech.SynthesisInput(text=phrase)
+            
+            # Build voice parameters (using 'en-US' for all)
+            voice = texttospeech.VoiceSelectionParams(
+                language_code='en-US',
+                ssml_gender=texttospeech.SsmlVoiceGender.NEUTRAL
+            )
+            
+            # Configure audio settings
+            audio_config = texttospeech.AudioConfig(
+                audio_encoding=texttospeech.AudioEncoding.MP3
+            )
+            
+            # Call Google Cloud TTS API
+            response = tts_client.synthesize_speech(
+                input=synthesis_input,
+                voice=voice,
+                audio_config=audio_config
+            )
+            
+            # Save the audio file
             output_file_en = f"direct_en_{i}.mp3"
-            tts_en.save(output_file_en)
+            with open(output_file_en, "wb") as out:
+                out.write(response.audio_content)
             print(f"✓ Saved English-only audio to {output_file_en}")
             
         except Exception as e:

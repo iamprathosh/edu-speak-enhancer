@@ -4,7 +4,7 @@
 
 // Base URL for API requests - change this for different environments
 export const API_BASE_URL = process.env.NODE_ENV === 'production' 
-  ? 'https://api.edumate.app' // Production API URL
+  ? 'http://localhost:5000' // Production API URL (changed from api.edumate.app)
   : 'http://localhost:5000';   // Local development API URL
 
 // Helper function to get full API URL
