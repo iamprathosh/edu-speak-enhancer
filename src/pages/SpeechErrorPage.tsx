@@ -4,6 +4,7 @@ import Header from '@/components/Header';
 import { useSpeechError } from '@/hooks/useSpeechError';
 import { practiceSentences, getErrorAudio } from '@/services/speechErrorService';
 import { useToast } from '@/hooks/use-toast';
+import { LoadingIndicator } from '@/components/ui/loading-indicator';
 
 const SpeechErrorPage = () => {
   const { 
@@ -93,16 +94,23 @@ const SpeechErrorPage = () => {
                 <h3 className="text-xl font-medium text-edumate-900 mb-6">Current Analysis</h3>
                 
                 <div className="bg-white p-6 rounded-lg border border-slate-100 mb-6">
-                  <p className="text-lg text-slate-800 leading-relaxed">
-                    {isRecording ? (
-                      <span className="text-edumate-500 animate-pulse">Recording your speech...</span>
-                    ) : isProcessing ? (
-                      <span className="text-slate-500">Processing your speech...</span>
-                    ) : (
-                      renderSentenceWithHighlights()
-                    )}
-                  </p>
-                  {analysis && (
+                  {isRecording ? (
+                    <div className="flex flex-col items-center justify-center py-6">
+                      <div className="w-12 h-12 rounded-full bg-red-50 flex items-center justify-center mb-3 animate-pulse">
+                        <Mic className="w-6 h-6 text-red-500" />
+                      </div>
+                      <p className="text-edumate-500">Recording your speech...</p>
+                    </div>
+                  ) : isProcessing ? (
+                    <div className="flex flex-col items-center justify-center py-6">
+                      <LoadingIndicator size="md" text="Processing your speech..." />
+                    </div>
+                  ) : (
+                    <p className="text-lg text-slate-800 leading-relaxed">
+                      {renderSentenceWithHighlights()}
+                    </p>
+                  )}
+                  {analysis && !isProcessing && !isRecording && (
                     <div className="mt-4 text-sm text-slate-500 flex items-center">
                       <Mic className="w-4 h-4 mr-1" /> 
                       Speech sample recorded
@@ -171,7 +179,11 @@ const SpeechErrorPage = () => {
                 {selectedWord && analysis ? `Correction for "${selectedWord}"` : 'Select a highlighted word for correction'}
               </h3>
               
-              {selectedWord && analysis?.errors[selectedWord] ? (
+              {isProcessing ? (
+                <div className="flex justify-center py-12">
+                  <LoadingIndicator size="lg" text="Analyzing pronunciation..." />
+                </div>
+              ) : selectedWord && analysis?.errors[selectedWord] ? (
                 <div className="space-y-6">
                   <div className="bg-edumate-50 p-6 rounded-lg">
                     <h4 className="text-lg font-medium text-edumate-800 mb-3">Pronunciation Guide</h4>

@@ -1,4 +1,4 @@
-import { ArrowLeft, Mic, Play, Square, RefreshCw, Volume2, AlertCircle } from 'lucide-react';
+import { ArrowLeft, Mic, Play, Square, RefreshCw, Volume2, AlertCircle, ServerOff } from 'lucide-react';
 import { Link } from 'react-router-dom';
 import { useState, useRef, useEffect } from 'react';
 import Header from '@/components/Header';
@@ -8,13 +8,16 @@ import {
   getGoogleTTSAudio, 
   fetchAvailableVoices,
   Voice,
-  googleVoices
+  googleVoices,
+  getCustomTTSAudio // Add getCustomTTSAudio to imports
 } from '@/services/speechService';
 import { Button } from '@/components/ui/button';
 import { useToast } from '@/hooks/use-toast';
 import { Slider } from '@/components/ui/slider';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Textarea } from '@/components/ui/textarea';
+import { LoadingIndicator } from '@/components/ui/loading-indicator';
+import { checkBackendConnectivity } from '@/services/backendConfig';
 
 const ChorusPage = () => {
   const { 
@@ -36,6 +39,8 @@ const ChorusPage = () => {
   const [isPlaying, setIsPlaying] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string>("");
+  const [isBackendAvailable, setIsBackendAvailable] = useState<boolean | null>(null);
+  const [isCheckingBackend, setIsCheckingBackend] = useState(false);
   
   // State for available voices from the API
   const [availableVoices, setAvailableVoices] = useState<Voice[]>([]);
@@ -43,6 +48,17 @@ const ChorusPage = () => {
   
   // Add audio element reference
   const audioRef = useRef<HTMLAudioElement | null>(null);
+
+  // Cleanup effect for component unmount
+  useEffect(() => {
+    return () => {
+      // Stop any playing audio
+      if (audioRef.current) {
+        audioRef.current.pause();
+        audioRef.current.src = '';
+      }
+    };
+  }, []);
   
   // Fetch available voices when component mounts
   useEffect(() => {
@@ -77,9 +93,84 @@ const ChorusPage = () => {
     
     getVoices();
   }, [selectedVoice]);
+
+  // Check backend connectivity when component mounts
+  useEffect(() => {
+    const checkConnectivity = async () => {
+      setIsCheckingBackend(true);
+      try {
+        console.log('Checking backend connectivity from ChorusPage');
+        const isConnected = await checkBackendConnectivity();
+        console.log('Backend connectivity check result:', isConnected);
+        setIsBackendAvailable(isConnected);
+        if (!isConnected) {
+          console.error('Backend connectivity check failed in ChorusPage');
+          setError('Cannot connect to the speech server. Make sure the Flask backend is running.');
+        } else {
+          console.log('Backend connectivity check succeeded in ChorusPage');
+        }
+      } catch (err) {
+        console.error('Error checking backend connectivity:', err);
+        setIsBackendAvailable(false);
+        setError('Error checking backend connectivity.');
+      } finally {
+        setIsCheckingBackend(false);
+      }
+    };
+    
+    checkConnectivity();
+  }, []);
+
+  const retryBackendConnection = async () => {
+    setIsCheckingBackend(true);
+    setError('');
+    
+    try {
+      console.log('Retrying backend connection');
+      const isConnected = await checkBackendConnectivity();
+      console.log('Retry backend connection result:', isConnected);
+      setIsBackendAvailable(isConnected);
+      
+      if (isConnected) {
+        console.log('Connection successfully restored');
+        toast({
+          title: "Connection restored",
+          description: "Successfully connected to the speech server",
+        });
+        
+        // Retry loading voices if connection is established
+        console.log('Fetching available voices after connection restored');
+        const voices = await fetchAvailableVoices();
+        setAvailableVoices(voices);
+        
+        if (voices.length > 0 && !selectedVoice) {
+          const defaultVoice = voices.find(v => v.id.includes('en-US')) || voices[0];
+          setSelectedVoice(defaultVoice.id);
+        }
+      } else {
+        console.error('Backend still not available after retry');
+        setError('Still cannot connect to the speech server. Make sure the Flask backend is running.');
+      }
+    } catch (err) {
+      console.error('Error during retry:', err);
+      setIsBackendAvailable(false);
+      setError('Error checking backend connectivity.');
+    } finally {
+      setIsCheckingBackend(false);
+    }
+  };
   
-  // Updated function to play the text with selected voice and speed using Flask backend
   const playText = async () => {
+    // Check if backend is available before proceeding
+    if (isBackendAvailable === false) {
+      toast({
+        title: "Server unavailable",
+        description: "Speech server is not available. Please check your connection.",
+        variant: "destructive"
+      });
+      return;
+    }
+    
     if (!inputText.trim()) {
       toast({
         title: "Empty Text",
@@ -89,13 +180,10 @@ const ChorusPage = () => {
       return;
     }
     
-    if (!selectedVoice) {
-      toast({
-        title: "Voice Required",
-        description: "Please select a voice first.",
-        variant: "destructive"
-      });
-      return;
+    // Stop any currently playing audio
+    if (audioRef.current) {
+      audioRef.current.pause();
+      audioRef.current.src = '';
     }
     
     setIsPlaying(true);
@@ -103,43 +191,58 @@ const ChorusPage = () => {
     setError("");
     
     try {
-      // Get the selected voice object
+      console.log('Generating speech for text:', inputText);
+      
+      // Get the selected voice object (for display purposes)
       const voice = availableVoices.find(v => v.id === selectedVoice);
       
       toast({
         title: "Generating Speech",
-        description: `Using ${voice?.name || 'selected voice'} at ${speechSpeed}x speed`,
+        description: `Using ${voice?.name || 'selected voice'} with language detection`,
       });
       
-      // Call the backend TTS API
-      const audioData = await getGoogleTTSAudio({
-        text: inputText,
-        voiceId: selectedVoice,
-        speed: speechSpeed,
-      });
+      console.log('Calling custom TTS API...');
       
-      // Create a blob from the array buffer
-      const audioBlob = new Blob([audioData], { type: 'audio/mp3' });
-      const audioUrl = URL.createObjectURL(audioBlob);
+      // Call the backend custom TTS API
+      const audioBase64 = await getCustomTTSAudio(inputText);
+      
+      console.log('Received base64 audio, length:', audioBase64.length);
+      
+      // Create audio source from base64 string
+      const audioSrc = `data:audio/mp3;base64,${audioBase64}`;
       
       // Play the audio
       if (audioRef.current) {
-        audioRef.current.src = audioUrl;
-        await audioRef.current.play()
-          .catch(err => {
+        console.log('Setting audio source and playing...');
+        audioRef.current.src = audioSrc;
+        audioRef.current.oncanplaythrough = async () => {
+          try {
+            console.log('Audio loaded, playing now');
+            await audioRef.current?.play();
+          } catch (err) {
             console.error('Error playing audio:', err);
             setError('Failed to play audio. Please try again.');
-          });
+            setIsPlaying(false);
+          }
+        };
         
-        // Clean up blob URL when audio finishes playing
+        // Clean up when audio finishes playing
         audioRef.current.onended = () => {
-          URL.revokeObjectURL(audioUrl);
+          console.log('Audio playback complete');
           setIsPlaying(false);
         };
       }
     } catch (err) {
       console.error('Error with TTS:', err);
-      setError('Failed to generate speech. Please try again.');
+      const errorMessage = err instanceof Error ? err.message : 'Failed to generate speech. Please try again.';
+      
+      // Check if error is related to backend connectivity
+      if (errorMessage.includes('Cannot connect to the speech server') || 
+          errorMessage.includes('Failed to fetch')) {
+        setIsBackendAvailable(false);
+      }
+      
+      setError(errorMessage);
       setIsPlaying(false);
     } finally {
       setIsLoading(false);
@@ -212,34 +315,13 @@ const ChorusPage = () => {
               
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-6">
                 <div>
-                  <label className="block text-sm font-medium text-slate-700 mb-2">Voice</label>
-                  <Select 
-                    value={selectedVoice} 
-                    onValueChange={setSelectedVoice}
-                    disabled={isLoadingVoices}
-                  >
-                    <SelectTrigger className="w-full">
-                      {isLoadingVoices ? (
-                        <span className="text-slate-500">Loading voices...</span>
-                      ) : (
-                        <SelectValue placeholder="Select voice" />
-                      )}
-                    </SelectTrigger>
-                    <SelectContent>
-                      {voicesByAccent.map((group) => (
-                        <div key={group.accent}>
-                          <div className="px-2 py-1.5 text-sm font-medium text-slate-900 bg-slate-100">
-                            {group.accent}
-                          </div>
-                          {group.voices.map((voice) => (
-                            <SelectItem key={voice.id} value={voice.id}>
-                              {voice.name} ({voice.gender})
-                            </SelectItem>
-                          ))}
-                        </div>
-                      ))}
-                    </SelectContent>
-                  </Select>
+                  <div className="border p-4 rounded-lg bg-slate-50 mb-4">
+                    <h3 className="text-sm font-medium mb-2 text-edumate-900">Multi-Language Detection</h3>
+                    <p className="text-xs text-slate-700">
+                      The system automatically detects the language of each word and generates speech with proper pronunciation.
+                      Currently supports: English, French, Spanish, and German.
+                    </p>
+                  </div>
                 </div>
                 
                 <div>
@@ -257,22 +339,50 @@ const ChorusPage = () => {
                 </div>
               </div>
               
-              {/* Show error message if there is one */}
+              {/* Enhanced error message display */}
               {error && (
                 <div className="mb-4 p-3 bg-red-50 text-red-700 rounded-md flex items-start">
-                  <AlertCircle className="w-5 h-5 mr-2 flex-shrink-0 mt-0.5" />
-                  <span>{error}</span>
+                  {isBackendAvailable === false ? (
+                    <ServerOff className="w-5 h-5 mr-2 flex-shrink-0 mt-0.5" />
+                  ) : (
+                    <AlertCircle className="w-5 h-5 mr-2 flex-shrink-0 mt-0.5" />
+                  )}
+                  <div className="flex-1">
+                    <p>{error}</p>
+                    
+                    {isBackendAvailable === false && (
+                      <Button 
+                        variant="outline" 
+                        size="sm" 
+                        className="mt-2"
+                        onClick={retryBackendConnection}
+                        disabled={isCheckingBackend}
+                      >
+                        {isCheckingBackend ? (
+                          <>
+                            <LoadingIndicator size="sm" className="mr-2" />
+                            Checking connection...
+                          </>
+                        ) : (
+                          <>
+                            <RefreshCw className="w-4 h-4 mr-2" />
+                            Retry connection
+                          </>
+                        )}
+                      </Button>
+                    )}
+                  </div>
                 </div>
               )}
               
               <Button
                 onClick={playText}
-                disabled={isPlaying || isLoading || !inputText.trim() || !selectedVoice}
+                disabled={isPlaying || isLoading || !inputText.trim() || isBackendAvailable === false}
                 className="self-start mb-8"
               >
                 {isLoading ? (
                   <>
-                    <RefreshCw className="w-4 h-4 mr-2 animate-spin" />
+                    <LoadingIndicator size="sm" className="mr-2" />
                     Generating...
                   </>
                 ) : isPlaying ? (
@@ -283,7 +393,7 @@ const ChorusPage = () => {
                 ) : (
                   <>
                     <Volume2 className="w-4 h-4 mr-2" />
-                    Read Aloud
+                    Read with Language Detection
                   </>
                 )}
               </Button>
@@ -315,7 +425,7 @@ const ChorusPage = () => {
                   <div className="space-y-6">
                     <div className="space-y-4">
                       {Object.entries(feedback)
-                        .filter(([key]) => key !== 'suggestions')
+                        .filter(([key]) => key !== 'suggestions') // Ensure 'suggestions' is a string array if it exists
                         .map(([key, value]) => (
                           <div key={key} className="space-y-2">
                             <div className="flex justify-between items-center">
@@ -335,7 +445,7 @@ const ChorusPage = () => {
                     <div>
                       <h4 className="text-lg font-medium text-edumate-900 mb-3">Suggestions</h4>
                       <ul className="space-y-2">
-                        {feedback.suggestions.map((suggestion, index) => (
+                        {feedback.suggestions.map((suggestionItem, index) => ( // Changed suggestion to suggestionItem
                           <li key={index} className="flex items-start">
                             <span className="flex-shrink-0 h-5 w-5 rounded-full bg-edumate-100 flex items-center justify-center mr-2 mt-0.5">
                               <svg 
@@ -353,7 +463,7 @@ const ChorusPage = () => {
                                 <polyline points="20 6 9 17 4 12"></polyline>
                               </svg>
                             </span>
-                            <span className="text-slate-700">{suggestion}</span>
+                            <span className="text-slate-700">{suggestionItem}</span> // Changed suggestion to suggestionItem
                           </li>
                         ))}
                       </ul>
@@ -375,11 +485,11 @@ const ChorusPage = () => {
                   </li>
                   <li className="flex">
                     <span className="flex-shrink-0 h-6 w-6 rounded-full bg-edumate-100 flex items-center justify-center mr-3 mt-0.5 text-edumate-500 font-medium">2</span>
-                    <p className="text-slate-700">Select a voice and adjust the speech speed</p>
+                    <p className="text-slate-700">Adjust the speech speed if needed</p>
                   </li>
                   <li className="flex">
                     <span className="flex-shrink-0 h-6 w-6 rounded-full bg-edumate-100 flex items-center justify-center mr-3 mt-0.5 text-edumate-500 font-medium">3</span>
-                    <p className="text-slate-700">Click "Read Aloud" to hear the text spoken in the selected voice</p>
+                    <p className="text-slate-700">Click "Read with Language Detection" to hear the text with proper pronunciation for each language</p>
                   </li>
                 </ol>
               </div>

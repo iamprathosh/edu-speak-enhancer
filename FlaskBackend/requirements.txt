@@ -1,0 +1,12 @@
+Flask
+Flask-Cors
+google-cloud-texttospeech
+google-api-python-client
+google-auth-httplib2
+python-dotenv
+nltk
+google-generativeai
+Flask-Limiter
+Werkzeug
+gTTS
+googletrans

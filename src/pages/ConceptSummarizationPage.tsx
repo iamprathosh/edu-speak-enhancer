@@ -4,6 +4,7 @@ import Header from '@/components/Header';
 import { useConceptSummarization } from '@/hooks/useConceptSummarization';
 import { CompressionLevel } from '@/services/conceptService';
 import { useToast } from '@/hooks/use-toast';
+import { LoadingIndicator } from '@/components/ui/loading-indicator';
 
 const ConceptSummarizationPage = () => {
   const { 
@@ -158,7 +159,7 @@ const ConceptSummarizationPage = () => {
                 <div className="bg-white p-6 rounded-lg border border-slate-100 min-h-[200px]">
                   {isProcessing ? (
                     <div className="flex items-center justify-center h-[188px]">
-                      <div className="animate-spin rounded-full h-8 w-8 border-t-2 border-b-2 border-edumate-500"></div>
+                      <LoadingIndicator size="lg" text="Generating summary..." />
                     </div>
                   ) : isGenerated ? (
                     <p className="text-slate-800 leading-relaxed">
@@ -204,7 +205,7 @@ const ConceptSummarizationPage = () => {
                   
                   {isProcessing ? (
                     <div className="py-8 flex justify-center">
-                      <div className="animate-spin rounded-full h-8 w-8 border-t-2 border-b-2 border-edumate-500"></div>
+                      <LoadingIndicator size="md" />
                     </div>
                   ) : isGenerated ? (
                     <div className="space-y-3">

@@ -1,0 +1,179 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Text-to-Speech Tester</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 800px;
+            margin: 0 auto;
+            padding: 20px;
+        }
+        textarea {
+            width: 100%;
+            height: 100px;
+            margin-bottom: 10px;
+        }
+        button {
+            padding: 10px 15px;
+            background-color: #4CAF50;
+            color: white;
+            border: none;
+            cursor: pointer;
+        }
+        #status {
+            margin-top: 10px;
+            padding: 10px;
+            border-radius: 5px;
+        }
+        .success {
+            background-color: #dff0d8;
+            color: #3c763d;
+        }
+        .error {
+            background-color: #f2dede;
+            color: #a94442;
+        }
+        .log {
+            margin-top: 20px;
+            padding: 10px;
+            background-color: #f8f9fa;
+            border: 1px solid #ddd;
+            border-radius: 5px;
+            max-height: 200px;
+            overflow-y: auto;
+            font-family: monospace;
+        }
+        .multilang-example {
+            margin-top: 20px;
+        }
+        .example-btn {
+            margin-right: 10px;
+            margin-bottom: 10px;
+            background-color: #6c757d;
+        }
+    </style>
+</head>
+<body>
+    <h1>Text-to-Speech Tester</h1>
+    
+    <div>
+        <h3>Enter text to convert to speech:</h3>
+        <textarea id="inputText" placeholder="Type text here...">Hello, this is a test. Bonjour, c'est un test.</textarea>
+    </div>
+    
+    <button id="convertBtn">Convert to Speech</button>
+    
+    <div id="status" style="display: none;"></div>
+    
+    <div class="multilang-examples">
+        <h3>Test with these examples:</h3>
+        <button class="example-btn" data-text="Hello world. This is English text.">English</button>
+        <button class="example-btn" data-text="Bonjour le monde. Comment ça va? C'est un texte en français.">French</button>
+        <button class="example-btn" data-text="Hola mundo. ¿Cómo estás? Este es un texto en español.">Spanish</button>
+        <button class="example-btn" data-text="Hello world. Bonjour le monde. Hola mundo.">Mixed Languages</button>
+    </div>
+    
+    <div id="logContainer" class="log" style="display: none;">
+        <h4>API Response Log:</h4>
+        <pre id="logContent"></pre>
+    </div>
+    
+    <div id="audioContainer" style="margin-top: 20px;">
+        <audio id="audioPlayer" controls style="display: none;"></audio>
+    </div>
+    
+    <script>
+        document.getElementById('convertBtn').addEventListener('click', () => {
+            convertTextToSpeech();
+        });
+        
+        // Add event listeners to example buttons
+        document.querySelectorAll('.example-btn').forEach(button => {
+            button.addEventListener('click', function() {
+                document.getElementById('inputText').value = this.dataset.text;
+                convertTextToSpeech();
+            });
+        });
+        
+        async function convertTextToSpeech() {
+            const inputText = document.getElementById('inputText').value;
+            const statusDiv = document.getElementById('status');
+            const audioPlayer = document.getElementById('audioPlayer');
+            const logContainer = document.getElementById('logContainer');
+            const logContent = document.getElementById('logContent');
+            
+            if (!inputText.trim()) {
+                showStatus('Please enter some text to convert', 'error');
+                return;
+            }
+            
+            showStatus('Converting text to speech...', 'success');
+            
+            // Clear previous log
+            logContent.textContent = '';
+            logContainer.style.display = 'block';
+            
+            try {
+                // Log the request
+                logContent.textContent += `Request: POST /api/texttospeech\n`;
+                logContent.textContent += `Payload: ${JSON.stringify({text: inputText})}\n\n`;
+                
+                const startTime = performance.now();
+                
+                const response = await fetch('http://localhost:5000/api/texttospeech', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({ text: inputText })
+                });
+                
+                const endTime = performance.now();
+                const responseTime = endTime - startTime;
+                
+                logContent.textContent += `Response Status: ${response.status} ${response.statusText}\n`;
+                logContent.textContent += `Response Time: ${responseTime.toFixed(2)}ms\n\n`;
+                
+                if (!response.ok) {
+                    const errorData = await response.json();
+                    logContent.textContent += `Error: ${JSON.stringify(errorData, null, 2)}\n`;
+                    throw new Error(errorData.error || 'Failed to convert text to speech');
+                }
+                
+                const data = await response.json();
+                
+                // Log the response summary (not the full base64 audio data)
+                logContent.textContent += `Response: Received ${data.audio_base64 ? 'audio data' : 'no audio data'}\n`;
+                if (data.audio_base64) {
+                    const audioSize = (data.audio_base64.length * 0.75) / 1024; // Approximate KB size
+                    logContent.textContent += `Audio size: ~${audioSize.toFixed(2)} KB\n`;
+                }
+                
+                if (!data.audio_base64) {
+                    throw new Error('No audio data received');
+                }
+                
+                // Create audio source from base64
+                const audioSrc = `data:audio/mp3;base64,${data.audio_base64}`;
+                audioPlayer.src = audioSrc;
+                audioPlayer.style.display = 'block';
+                
+                showStatus('Text converted successfully!', 'success');
+            } catch (error) {
+                console.error('Error:', error);
+                showStatus(`Error: ${error.message}`, 'error');
+            }
+        }
+        
+        function showStatus(message, type) {
+            const statusDiv = document.getElementById('status');
+            statusDiv.textContent = message;
+            statusDiv.className = type;
+            statusDiv.style.display = 'block';
+        }
+    </script>
+</body>
+</html>

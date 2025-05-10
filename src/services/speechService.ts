@@ -1,4 +1,4 @@
-import { getApiUrl } from './backendConfig';
+import { getApiUrl, checkBackendConnectivity, handleApiError } from './backendConfig';
 
 // Mock data for speech analysis
 interface SpeechFeedback {
@@ -13,7 +13,7 @@ interface SpeechFeedback {
 export interface Voice {
   id: string;
   name: string;
-  gender: 'male' | 'female';
+  gender: string;
   accent: string;
 }
 
@@ -50,87 +50,15 @@ export const analyzeSpeech = (duration: number): Promise<SpeechFeedback> => {
           "Pay attention to the 'th' sound",
           "Great job with intonation patterns",
           "Focus on syllable stress in longer words"
-        ].sort(() => 0.5 - Math.random()).slice(0, 3)
+        ]
       });
-    }, duration * 300); // Simulate longer processing for longer recordings
+    }, 1500);
   });
 };
 
-// Simulate text-to-speech functionality
-export const getAudioForPhrase = (
-  phrase: string, 
-  voiceId: string = 'en-US-1', 
-  speed: number = 1.0
-): string => {
-  // In a real implementation, this would generate or fetch audio files
-  // For now, we'll just return a mock URL
-  return `https://api.example.com/tts?text=${encodeURIComponent(phrase)}&voice=${voiceId}&speed=${speed}`;
-};
-
-// Google TTS API options
-export interface GoogleTTSOptions {
-  text: string;
-  voiceId: string; // The Google voice ID
-  speed: number;   // Speech rate between 0.25 and 4.0
-  pitch?: number;  // Optional pitch adjustment (-20.0 to 20.0)
-  languageCode?: string; // Default to 'en-US' if not specified
-}
-
-// Function to call Google TTS API using our Flask backend
-export const getGoogleTTSAudio = async (options: GoogleTTSOptions): Promise<ArrayBuffer> => {
-  try {
-    // Point to the Flask backend endpoint
-    const endpoint = '/api/tts';
-    
-    const response = await fetch(endpoint, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({
-        text: options.text,
-        voiceId: options.voiceId,
-        speed: options.speed,
-      }),
-    });
-
-    if (!response.ok) {
-      throw new Error(`TTS API error: ${response.status}`);
-    }
-
-    return await response.arrayBuffer();
-  } catch (error) {
-    console.error('Error calling TTS API:', error);
-    throw error;
-  }
-};
-
-// Function to fetch available voices from the backend
-export const fetchAvailableVoices = async (): Promise<Voice[]> => {
-  try {
-    const response = await fetch('/api/voices');
-    
-    if (!response.ok) {
-      throw new Error(`Failed to fetch voices: ${response.status}`);
-    }
-    
-    const voices = await response.json();
-    return voices;
-  } catch (error) {
-    console.error('Error fetching available voices:', error);
-    // Return the mock voices as fallback
-    return googleVoices.map(voice => ({
-      id: voice.id,
-      name: voice.name,
-      gender: voice.gender.toLowerCase() as 'male' | 'female',
-      accent: voice.accent
-    }));
-  }
-};
-
-// Map of Google TTS voices - these would come from the actual Google API
+// Google TTS voices
 export const googleVoices = [
-  { id: 'en-US-Wavenet-A', name: 'Wavenet A', accent: 'American', gender: 'Female' },
+  { id: 'en-US-Wavenet-A', name: 'Wavenet A', accent: 'American', gender: 'Male' },
   { id: 'en-US-Wavenet-B', name: 'Wavenet B', accent: 'American', gender: 'Male' },
   { id: 'en-US-Wavenet-C', name: 'Wavenet C', accent: 'American', gender: 'Female' },
   { id: 'en-US-Wavenet-D', name: 'Wavenet D', accent: 'American', gender: 'Male' },
@@ -142,33 +70,154 @@ export const googleVoices = [
   { id: 'en-AU-Wavenet-A', name: 'Wavenet A', accent: 'Australian', gender: 'Female' },
   { id: 'en-AU-Wavenet-B', name: 'Wavenet B', accent: 'Australian', gender: 'Male' },
   { id: 'en-IN-Wavenet-A', name: 'Wavenet A', accent: 'Indian', gender: 'Female' },
-  { id: 'en-IN-Wavenet-B', name: 'Wavenet B', accent: 'Indian', gender: 'Male' },
 ];
 
-/**
- * Function to call the backend API for text-to-speech
- * @param {string} text - The text to convert to speech
- * @param {string} voiceId - The voice ID to use for speech synthesis
- * @param {number} speed - The speed of the speech
- * @returns {Promise<ArrayBuffer>} - The audio content as an ArrayBuffer
- */
-export const callTextToSpeechAPI = async (text: string, voiceId: string, speed: number): Promise<ArrayBuffer> => {
+// Get audio from Google TTS API via our backend
+export const getGoogleTTSAudio = async (text: string, voiceId: string, speed: number): Promise<Blob> => {
   try {
-    const response = await fetch(getApiUrl('/api/tts'), {
+    // First check if backend is accessible
+    const isConnected = await checkBackendConnectivity();
+    if (!isConnected) {
+      throw new Error(
+        `Cannot connect to the speech server. Please make sure the Flask backend is running at ${getApiUrl('')}`
+      );
+    }
+    
+    const response = await fetch(getApiUrl('/api/tts_google'), { // Changed to /api/tts_google
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
       },
-      body: JSON.stringify({ text, voiceId, speed }),
+      body: JSON.stringify({
+        text,
+        voiceId: voiceId,
+        speed
+      }),
     });
-
+    
     if (!response.ok) {
-      throw new Error(`TTS API error: ${response.status}`);
+      let errorMessage = `Failed with status: ${response.status}`;
+      try {
+        // Try to parse JSON error first
+        const errorData = await response.json();
+        errorMessage = errorData.error || JSON.stringify(errorData);
+      } catch (jsonError) {
+        // If JSON parsing fails, try to get text error
+        try {
+          const textError = await response.text();
+          if (textError) {
+            errorMessage = textError;
+          }
+        } catch (textErrorErr) {
+          // Ignore if text parsing also fails
+        }
+      }
+      // Limit the length of the error message shown to the user
+      throw new Error(errorMessage.substring(0, 200)); 
+    }
+    
+    // Check content type before assuming blob
+    const contentType = response.headers.get('content-type');
+    if (!contentType || !contentType.includes('audio/mpeg')) {
+      console.warn(`Unexpected content type received: ${contentType}`);
+      // Try to read as text to see if it's an error message
+      const potentialErrorText = await response.text();
+      throw new Error(`Received unexpected response format from server. ${potentialErrorText.substring(0,100)}`);
     }
 
-    return await response.arrayBuffer();
+    return await response.blob();
   } catch (error) {
-    console.error('Error calling TTS API:', error);
-    throw error;
+    console.error('Error in text-to-speech API call:', error);
+    throw handleApiError(error);
+  }
+};
+
+// Get audio from custom gTTS and googletrans backend
+export const getCustomTTSAudio = async (text: string): Promise<string> => {
+  try {
+    console.log('getCustomTTSAudio called with text:', text);
+    
+    // First check if backend is accessible
+    console.log('Checking backend connectivity...');
+    const isConnected = await checkBackendConnectivity();
+    console.log('Backend connectivity check result:', isConnected);
+    
+    if (!isConnected) {
+      console.error('Backend connectivity check failed');
+      throw new Error(
+        `Cannot connect to the speech server. Please make sure the Flask backend is running at ${getApiUrl('')}`
+      );
+    }
+
+    console.log('Making request to custom TTS API...');
+    const apiUrl = getApiUrl('/api/texttospeech');
+    console.log('API URL:', apiUrl);
+    
+    const response = await fetch(apiUrl, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ text }),
+    });
+    
+    console.log('Response status:', response.status, response.statusText);
+
+    if (!response.ok) {
+      let errorMessage = `Failed with status: ${response.status}`;
+      try {
+        const errorData = await response.json();
+        errorMessage = errorData.error || JSON.stringify(errorData);
+        console.error('Error data:', errorData);
+      } catch (jsonError) {
+        try {
+          const textError = await response.text();
+          if (textError) {
+            errorMessage = textError;
+            console.error('Error text:', textError);
+          }
+        } catch (textErrorErr) { /* ignore */ }
+      }
+      throw new Error(errorMessage.substring(0, 200));
+    }
+
+    const data = await response.json();
+    if (!data.audio_base64) {
+      throw new Error('No audio data received from custom TTS endpoint');
+    }
+    return data.audio_base64;
+
+  } catch (error) {
+    console.error('Error in custom text-to-speech API call:', error);
+    throw handleApiError(error);
+  }
+};
+
+// Fetch available voices from API
+export const fetchAvailableVoices = async (): Promise<Voice[]> => {
+  try {
+    const response = await fetch(getApiUrl('/api/voices'));
+    
+    if (!response.ok) {
+      let errorMessage = `Failed with status: ${response.status}`;
+      try {
+        const errorData = await response.json();
+        errorMessage = errorData.error || JSON.stringify(errorData);
+      } catch (jsonError) {
+         try {
+          const textError = await response.text();
+          if (textError) {
+            errorMessage = textError;
+          }
+        } catch (textErrorErr) { }
+      }
+      throw new Error(errorMessage.substring(0, 200));
+    }
+    
+    return await response.json();
+  } catch (error) {
+    console.error('Error fetching voices:', error);
+    // Fall back to predefined voices if API call fails
+    return googleVoices;
   }
 };

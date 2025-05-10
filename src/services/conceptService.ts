@@ -18,9 +18,9 @@ export const sampleText = `Photosynthesis is the process by which plants, algae,
 
 The overall reaction of photosynthesis can be summarized by the chemical equation: 6CO₂ + 6H₂O + light energy → C₆H₁₂O₆ + 6O₂. This indicates that carbon dioxide and water, in the presence of light energy, are converted into glucose and oxygen.
 
-Photosynthesis occurs in two main stages: the light-dependent reactions and the light-independent reactions (Calvin cycle). In the light-dependent reactions, which take place in the thylakoid membranes, light energy is converted into chemical energy in the form of ATP and NADPH. Water molecules are split, releasing oxygen as a byproduct. In the Calvin cycle, which occurs in the stroma of the chloroplast, the ATP and NADPH produced during the light-dependent reactions are used to convert carbon dioxide into glucose.
+Photosynthesis occurs in two main stages: the light-dependent reactions and the Calvin cycle (or light-independent reactions). The light-dependent reactions take place in the thylakoid membranes of the chloroplasts, where water is split, releasing oxygen and producing ATP (adenosine triphosphate) and NADPH (nicotinamide adenine dinucleotide phosphate). The Calvin cycle takes place in the stroma of the chloroplast, where carbon dioxide is fixed and converted into glucose using the ATP and NADPH produced in the light-dependent reactions.
 
-The significance of photosynthesis extends beyond plant nutrition. It plays a crucial role in the global carbon cycle by removing carbon dioxide from the atmosphere and releasing oxygen. This process is vital for maintaining atmospheric oxygen levels necessary for aerobic organisms, including humans. Additionally, photosynthesis is the primary way in which energy enters many ecosystems, as plants and other photosynthetic organisms form the base of food chains and webs.
+Photosynthesis is vital for life on Earth as it maintains atmospheric oxygen levels necessary for aerobic organisms, removes carbon dioxide from the atmosphere, and provides the energy stored in chemical bonds that fuels nearly all ecosystems as the foundation of food chains.
 
 Factors affecting the rate of photosynthesis include light intensity, carbon dioxide concentration, temperature, and water availability. Understanding these factors is important in agriculture for optimizing crop yields and in ecology for predicting how changes in environmental conditions might impact ecosystem productivity.`;
 
@@ -40,7 +40,14 @@ export const summarizeConcept = (text: string, level: CompressionLevel): Promise
     })
     .then(response => {
       if (!response.ok) {
-        throw new Error('Failed to summarize text');
+        return response.json().then(data => {
+          throw new Error(data.error || `Failed with status: ${response.status}`);
+        }).catch(err => {
+          if (err instanceof SyntaxError) {
+            throw new Error(`Failed with status: ${response.status}`);
+          }
+          throw err;
+        });
       }
       return response.json();
     })

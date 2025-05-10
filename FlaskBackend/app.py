@@ -3,14 +3,14 @@ import os
 import logging
 from flask import Flask, request, jsonify, send_file
 from flask_cors import CORS
-from google.cloud import texttospeech
+from google.cloud import texttospeech , speech , vision  # Added speech and vision
 from google.api_core import exceptions
 import io
 from dotenv import load_dotenv
-from nltk.corpus import stopwords
+from nltk.corpus import stopwords, wordnet
 from nltk.tokenize import sent_tokenize, word_tokenize
 from nltk.probability import FreqDist
-from nltk.chunk import RegexpParser  # For improved phrase extraction
+from nltk.chunk import RegexpParser
 from heapq import nlargest
 import string
 import re
@@ -18,8 +18,14 @@ from collections import Counter
 import traceback
 import google.generativeai as genai
 import json
-from flask_limiter import Limiter  # For rate limiting
+from flask_limiter import Limiter
 from flask_limiter.util import get_remote_address
+from werkzeug.utils import secure_filename
+import language_tool_python  # Added for grammar check
+import uuid  # Added for generating unique IDs
+import base64
+from gtts import gTTS
+from googletrans import Translator
 
 # --- Configuration and Initialization (Same as previous, with additions) ---
 
@@ -34,8 +40,8 @@ logger = logging.getLogger(__name__)
 load_dotenv()
 
 # Initialize Flask app
-app = Flask(__name__)
-CORS(app)
+app = Flask(__name__, static_folder='static')
+CORS(app, resources={r"/api/*": {"origins": "*"}}, supports_credentials=True)
 
 # Initialize rate limiter
 limiter = Limiter(
@@ -44,6 +50,12 @@ limiter = Limiter(
     default_limits=["200 per day", "50 per hour"],  # Example limits
     storage_uri="memory://",  # Use in-memory storage; consider Redis for production
 )
+
+# Add a test route that serves a static HTML page
+@app.route('/test')
+def test_page():
+    logger.info("Test page requested")
+    return app.send_static_file('test.html')
 
 # Initialize Gemini API (Prioritize)
 gemini_available = False
@@ -61,14 +73,37 @@ else:
     logger.warning("GEMINI_API_KEY environment variable not set!")
     logger.warning("Using NLTK fallback for summarization and concept extraction.")
 
-
 # Initialize Google Cloud TTS
 try:
-    client = texttospeech.TextToSpeechClient()
+    tts_client = texttospeech.TextToSpeechClient()
     logger.info("Google Cloud TTS client initialized successfully")
 except Exception as e:
     logger.error(f"Failed to initialize Google Cloud TTS client: {str(e)}")
-    client = None  # Ensure client is None if initialization fails
+    tts_client = None  # Ensure client is None if initialization fails
+
+# Initialize Google Cloud Speech-to-Text
+try:
+    speech_client = speech.SpeechClient()
+    logger.info("Google Cloud Speech client initialized successfully")
+except Exception as e:
+    logger.error(f"Failed to initialize Google Cloud Speech client: {str(e)}")
+    speech_client = None
+
+# Initialize Google Cloud Vision
+try:
+    vision_client = vision.ImageAnnotatorClient()
+    logger.info("Google Cloud Vision client initialized successfully")
+except Exception as e:
+    logger.error(f"Failed to initialize Google Cloud Vision client: {str(e)}")
+    vision_client = None
+
+# Initialize LanguageTool
+try:
+    lang_tool = language_tool_python.LanguageTool('en-US')
+    logger.info("LanguageTool initialized successfully")
+except Exception as e:
+    logger.error(f"Failed to initialize LanguageTool: {str(e)}")
+    lang_tool = None
 
 
 def download_nltk_resources():
@@ -91,9 +126,63 @@ def download_nltk_resources():
     except LookupError:
         logger.info("Downloading NLTK averaged_perceptron_tagger")
         nltk.download('averaged_perceptron_tagger', quiet=True)
+    try:  # Download WordNet
+        nltk.data.find('corpora/wordnet')
+        logger.info("NLTK wordnet already downloaded")
+    except LookupError:
+        logger.info("Downloading NLTK wordnet")
+        nltk.download('wordnet', quiet=True)
+    # Add gTTS and googletrans resource check if necessary, though they usually don't require explicit download like nltk
+    logger.info("gTTS and googletrans are assumed to be installed via pip.")
 
 
 download_nltk_resources()
+
+# Function to detect the language of the given text
+def detect_language_for_word(text):
+    # Using a simpler approach with the new version of googletrans
+    # googletrans 4.0.0+ is async, but we're running in a sync environment
+    # Let's use a simpler language detection method
+    
+    # Map of common words to their languages
+    french_words = {'bonjour', 'merci', 'oui', 'non', 'le', 'la', 'les', 'et', 'je', 'tu', 'il', 'elle', 'nous', 'vous', 'ils', 'elles', 'un', 'une', 'des', 'du', 'de', 'à', 'au', 'aux', 'avec', 'pour', 'dans', 'sur', 'sous', 'sans', 'qui', 'que', 'quoi', 'comment', 'pourquoi', 'où'}
+    spanish_words = {'hola', 'gracias', 'sí', 'no', 'el', 'la', 'los', 'las', 'y', 'yo', 'tú', 'él', 'ella', 'nosotros', 'vosotros', 'ellos', 'ellas', 'un', 'una', 'unos', 'unas', 'del', 'al', 'a', 'con', 'para', 'en', 'sobre', 'bajo', 'sin', 'quien', 'que', 'como', 'porque', 'donde'}
+    german_words = {'hallo', 'danke', 'ja', 'nein', 'der', 'die', 'das', 'und', 'ich', 'du', 'er', 'sie', 'es', 'wir', 'ihr', 'sie', 'ein', 'eine', 'einen', 'einem', 'einer', 'eines', 'mit', 'für', 'in', 'auf', 'unter', 'ohne', 'wer', 'was', 'wie', 'warum', 'wo'}
+    
+    try:
+        # Clean the text
+        cleaned_text = text.lower().strip().rstrip('.,:;!?')
+        
+        # Check if the word is in any of our language sets
+        if cleaned_text in french_words:
+            logger.info(f"Detected '{text}' as French")
+            return 'fr'
+        elif cleaned_text in spanish_words:
+            logger.info(f"Detected '{text}' as Spanish")
+            return 'es'
+        elif cleaned_text in german_words:
+            logger.info(f"Detected '{text}' as German")
+            return 'de'
+        
+        # Check for language-specific patterns - this is a simple approximation
+        if any(char in 'éèêëàâäæçîïôœùûüÿ' for char in cleaned_text):
+            logger.info(f"Detected '{text}' as likely French (character patterns)")
+            return 'fr'
+        elif any(char in 'áéíóúüñ¿¡' for char in cleaned_text):
+            logger.info(f"Detected '{text}' as likely Spanish (character patterns)")
+            return 'es'
+        elif any(char in 'äöüß' for char in cleaned_text):
+            logger.info(f"Detected '{text}' as likely German (character patterns)")
+            return 'de'
+        
+        # Default to English for unknown words
+        logger.info(f"Defaulting '{text}' to English")
+        return 'en'
+    except Exception as e:
+        logger.error(f"Error detecting language for '{text}': {e}")
+        # Fallback to English to be safe
+        return 'en'
+
 
 # --- Error Handling ---
 
@@ -109,43 +198,49 @@ def handle_exception(e):
 
 # --- API Endpoints ---
 
-@app.route('/api/tts', methods=['POST'])
+@app.route('/api/tts_google', methods=['POST'])
 @limiter.limit("10 per minute")  # Apply rate limiting
-def text_to_speech():
-     if client is None:
+def text_to_speech_google(): # Renamed to avoid conflict
+    logger.info("Received request for /api/tts (Google TTS)")
+    if tts_client is None:
         logger.error("Google Cloud TTS client not initialized")
         return jsonify({'error': 'Text-to-speech service unavailable'}), 503
 
-     try:
+    try:
         data = request.get_json()
+        # Log the raw received data
+        logger.info(f"Received TTS request data: {data}")
 
         if not data:
             logger.warning("No JSON data received in request")
             return jsonify({'error': 'Invalid request: No JSON data'}), 400
 
-        if 'text' not in data or not data['text'].strip():
+        text = data.get('text', '').strip()
+        if not text:
             logger.warning("Missing or empty 'text' field in request")
             return jsonify({'error': 'Text is required'}), 400
 
-        text = data.get('text', '').strip()
         voice_id = data.get('voiceId', 'en-US-Standard-D')  # Default
+        # Log parsed parameters
+        logger.info(f"TTS parameters - Text length: {len(text)}, Voice ID: {voice_id}")
 
         try:
             speed = float(data.get('speed', 1.0))
             if speed < 0.25 or speed > 4.0:
-                logger.warning(f"Speed value out of range: {speed}")
+                logger.warning(f"Speed value out of range: {speed}. Received: {data.get('speed')}")
                 return jsonify({'error': 'Speed must be between 0.25 and 4.0'}), 400
         except (TypeError, ValueError) as e:
-            logger.warning(f"Invalid speed value: {data.get('speed')}")
+            logger.warning(f"Invalid speed value: {data.get('speed')}. Error: {e}")
             return jsonify({'error': 'Speed must be a valid number'}), 400
 
         try:
             language_code = '-'.join(voice_id.split('-')[:2])
             if not language_code or len(language_code.split('-')) != 2:
-                raise ValueError("Invalid voice ID format")
-        except Exception:
-            logger.warning(f"Invalid voice ID format: {voice_id}")
+                raise ValueError("Invalid voice ID format for language code extraction")
+        except Exception as e:
+            logger.warning(f"Invalid voice ID format: {voice_id}. Error extracting language code: {e}")
             return jsonify({'error': 'Invalid voice ID format'}), 400
+
         logger.info(f"Processing TTS request: language={language_code}, voice={voice_id}, speed={speed}")
         synthesis_input = texttospeech.SynthesisInput(text=text)
 
@@ -160,13 +255,13 @@ def text_to_speech():
         )
 
         try:
-            logger.info("Calling Google TTS API")
-            response = client.synthesize_speech(
+            logger.info(f"Calling Google TTS API with: Input='{text[:50]}...', Voice={voice}, Config={audio_config}") # Log API call details
+            response = tts_client.synthesize_speech(
                 input=synthesis_input,
                 voice=voice,
                 audio_config=audio_config
             )
-            logger.info("Successfully received TTS response")
+            logger.info("Successfully received TTS response from Google API")
 
             if not response.audio_content:
                 logger.error("No audio content in Google TTS response")
@@ -184,28 +279,114 @@ def text_to_speech():
             )
 
         except exceptions.GoogleAPICallError as e:
-            logger.error(f"Google API call error: {str(e)}")
+            # Log the specific Google API error
+            logger.error(f"Google API call error during synthesize_speech: {str(e)}", exc_info=True)
             return jsonify({'error': f'Text-to-speech API error: {str(e)}'}), 500
+        except Exception as e:
+            logger.error(f"Error processing TTS response or sending file: {str(e)}", exc_info=True)
+            return jsonify({'error': f'Server error after TTS generation: {str(e)}'}), 500
 
-     except Exception as e:
-        logger.error(f"Error in text_to_speech: {str(e)}")
-        logger.error(traceback.format_exc())
+    except Exception as e:
+        # Log any other unexpected errors in the main try block
+        logger.error(f"Unhandled error in text_to_speech_google function: {str(e)}", exc_info=True)
         return jsonify({'error': f'Server error: {str(e)}'}), 500
+
+
+@app.route('/api/texttospeech', methods=['POST'])
+@limiter.limit("10 per minute")
+def text_to_speech_custom():
+    logger.info("Received request for /api/texttospeech (Custom gTTS)")
+    # Log the request headers for debugging
+    logger.info(f"Request headers: {dict(request.headers)}")
+    
+    try:
+        data = request.get_json()
+        logger.info(f"Received custom TTS request data: {data}")
+
+        if not data:
+            logger.warning("No JSON data received in request for custom TTS")
+            return jsonify({'error': 'Invalid request: No JSON data'}), 400
+
+        text = data.get('text', '').strip()
+        if not text:
+            logger.warning("Missing or empty 'text' field in custom TTS request")
+            return jsonify({'error': 'Text is required'}), 400
+
+        logger.info(f"Processing text for TTS: '{text}'")
+        words = text.split(' ')
+        logger.info(f"Split into {len(words)} words")
+        
+        # Create an in-memory bytes buffer for the MP3 data
+        mp3_fp = io.BytesIO()
+        words_processed = 0
+        
+        for word in words:
+            if not word.strip(): # Skip empty strings that might result from multiple spaces
+                continue
+                
+            try:
+                # Detect the language of the word
+                detected_lang = detect_language_for_word(word)
+                logger.info(f"Processing word: '{word}', Detected language: {detected_lang}")
+                
+                # Generate speech for this word using gTTS
+                tts_word = gTTS(text=word, lang=detected_lang, slow=False)
+                
+                # Write the audio to our buffer
+                tts_word.write_to_fp(mp3_fp)
+                words_processed += 1
+                
+            except Exception as e:
+                logger.error(f"Error generating TTS for word '{word}' with lang '{detected_lang}': {e}")
+                # Log the full stack trace for debugging
+                logger.error(traceback.format_exc())
+                
+                # If this is the first word and we fail, we should return an error
+                if words_processed == 0:
+                    return jsonify({'error': f'Failed to generate speech for word: {word}. Error: {str(e)}'}), 500
+                
+                # Otherwise, we'll just skip this word and continue with the rest
+                logger.warning(f"Skipping word '{word}' and continuing with the rest of the text")
+                continue
+        
+        # If we haven't processed any words successfully, return an error
+        if words_processed == 0:
+            logger.error("No words were successfully processed")
+            return jsonify({'error': 'Failed to generate speech for any words in the text'}), 500
+        
+        # Rewind the buffer to the beginning to read the data
+        mp3_fp.seek(0)
+        audio_bytes = mp3_fp.read()
+        
+        # Encode the audio data to base64
+        audio_base64 = base64.b64encode(audio_bytes).decode('utf-8')
+        
+        logger.info(f"Successfully generated and encoded custom TTS audio, size: {len(audio_base64)} bytes")
+        response = jsonify({'audio_base64': audio_base64})
+        
+        # Log the response headers for debugging
+        logger.info(f"Response headers: {dict(response.headers)}")
+        return response
+
+    except Exception as e:
+        logger.error(f"Unhandled error in custom text_to_speech_custom function: {str(e)}", exc_info=True)
+        return jsonify({'error': f'Server error: {str(e)}'}), 500
+
 
 @app.route('/api/voices', methods=['GET'])
 def get_voices():
-    if client is None:
+    if tts_client is None:
         logger.error("Google Cloud TTS client not initialized")
         return jsonify({'error': 'Voice service unavailable'}), 503
-    
+
     try:
         logger.info("Retrieving available voices from Google TTS API")
         try:
-            response = client.list_voices()
+            response = tts_client.list_voices()
         except exceptions.GoogleAPICallError as e:
             logger.error(f"Google API call error: {str(e)}")
             return jsonify({'error': f'Failed to retrieve voices: {str(e)}'}), 500
-        
+
         voices = []
         for voice in response.voices:
             if any(lang_code.startswith('en-') for lang_code in voice.language_codes):
@@ -215,7 +396,7 @@ def get_voices():
                     gender = "Female"
                 else:
                     gender = "Neutral"
-                
+
                 language_code = voice.language_codes[0]
                 if language_code == "en-US":
                     accent = "American"
@@ -227,7 +408,7 @@ def get_voices():
                     accent = "Indian"
                 else:
                     accent = language_code
-                
+
                 voices.append({
                     "id": voice.name,
                     "name": voice.name.split('-')[-1],
@@ -235,23 +416,24 @@ def get_voices():
                     "gender": gender,
                     "language": language_code
                 })
-        
+
         if not voices:
             logger.warning("No English voices found in API response")
             return jsonify({'warning': 'No English voices available', 'voices': []}), 200
-            
+
         logger.info(f"Successfully retrieved {len(voices)} voices")
         return jsonify(voices)
-        
+
     except Exception as e:
         logger.error(f"Error in get_voices: {str(e)}")
         logger.error(traceback.format_exc())
         return jsonify({'error': f'Server error: {str(e)}'}), 500
 
 
-@app.route('/api/summarize', methods=['POST'])
-@limiter.limit("10 per minute")  # Apply rate limiting
-def summarize_concept():
+@app.route('/api/grammar-check', methods=['POST'])
+@limiter.limit("20 per minute")  # Higher limit for potentially faster checks
+def grammar_check():
+    """Checks grammar for the provided text, prioritizing Gemini."""
     try:
         data = request.get_json()
         if not data:
@@ -259,354 +441,264 @@ def summarize_concept():
         text = data.get('text', '').strip()
         if not text:
             return jsonify({'error': 'Text is required'}), 400
-        level = data.get('level', 'medium')
-        if level not in ['high', 'medium', 'low']:
-            return jsonify({'error': 'Invalid compression level'}), 400
-        if len(text) < 50:
-             return jsonify({'error': 'Text too short. Minimum 50 characters required.'}), 400
 
-        # --- Prioritize Gemini ---
-        if gemini_available:
+        logger.info(f"Received grammar check request for text length: {len(text)}")
+
+        corrections = []
+        use_fallback = True
+
+        if gemini_available and gemini_model:
             try:
-                summary, key_concepts, focus_points, related_topics = generate_concepts_with_gemini(text, level)  # Pass level
-                logger.info("Successfully generated summary and concepts with Gemini")
-                return jsonify({
-                    "summary": summary,
-                    "keyConcepts": key_concepts,
-                    "learningEnhancement": {
-                        "focusPoints": focus_points,
-                        "suggestedRelatedTopics": related_topics
-                    }
-                })
-            except Exception as e:
-                logger.error(f"Error with Gemini API: {str(e)}. Falling back to NLTK.")
-                # Fallback to NLTK is handled below
+                logger.info("Attempting grammar check with Gemini.")
+                prompt = f"""
+                Analyze the following text for grammatical errors, spelling mistakes, and awkward phrasing.
+                Provide corrections and brief explanations.
+                Format your response as a JSON list, where each item is an object with these exact keys:
+                "id" (generate a unique UUID string),
+                "error" (the incorrect word or phrase),
+                "correction" (the suggested correction),
+                "explanation" (a brief explanation of the error),
+                "startIndex" (estimated 0-based start index of the error in the original text),
+                "endIndex" (estimated 0-based end index of the error in the original text).
 
-        # --- NLTK Fallback ---
-        logger.info("Using NLTK for summarization and concept extraction")
-        summary = generate_summary(text, level)
-        key_concepts = extract_key_concepts(text)
-        focus_points = generate_focus_points(text, key_concepts)
-        related_topics = generate_related_topics(text, key_concepts)
-        return jsonify({
-            "summary": summary,
-            "keyConcepts": key_concepts,
-            "learningEnhancement": {
-                "focusPoints": focus_points,
-                "suggestedRelatedTopics": related_topics
-            }
-        })
+                If there are no errors, return an empty JSON list: [].
+
+                Text to analyze:
+                "{text}"
+                """
+                response = gemini_model.generate_content(prompt)
+                result_text = response.text
+
+                # Attempt to parse the JSON response
+                if '[' in result_text and ']' in result_text:
+                    json_str = result_text[result_text.find('['):result_text.rfind(']') + 1]
+                    parsed_corrections = json.loads(json_str)
+
+                    # Basic validation of the parsed structure
+                    if isinstance(parsed_corrections, list):
+                        corrections = parsed_corrections
+                        use_fallback = False
+                        logger.info(f"Successfully received and parsed {len(corrections)} corrections from Gemini.")
+                    else:
+                        logger.warning("Gemini response was not a valid JSON list.")
+                else:
+                    logger.warning("Could not find JSON list in Gemini response.")
+
+            except Exception as e:
+                logger.error(f"Error during Gemini grammar check: {str(e)}")
+                # Fallback will be used
+
+        if use_fallback:
+            if lang_tool:
+                logger.info("Using LanguageTool for grammar check fallback.")
+                try:
+                    matches = lang_tool.check(text)
+                    for match in matches:
+                        # Ensure there's at least one replacement suggestion
+                        correction = match.replacements[0] if match.replacements else text[match.offset:match.offset + match.errorLength]
+                        corrections.append({
+                            "id": f"gc_lt_{uuid.uuid4()}",
+                            "error": text[match.offset:match.offset + match.errorLength],
+                            "correction": correction,
+                            "explanation": match.message,
+                            "startIndex": match.offset,
+                            "endIndex": match.offset + match.errorLength
+                        })
+                    logger.info(f"Found {len(corrections)} potential issues using LanguageTool.")
+                except Exception as lt_error:
+                    logger.error(f"Error during LanguageTool check: {str(lt_error)}")
+            else:
+                logger.error("LanguageTool not available for fallback grammar check.")
+ 
+        return jsonify(corrections)
 
     except Exception as e:
-        logger.error(f"Error in summarize_concept: {str(e)}")
+        logger.error(f"Error in grammar_check: {str(e)}")
         logger.error(traceback.format_exc())
         return jsonify({'error': f'Server error: {str(e)}'}), 500
 
 
-# --- Helper Functions ---
-
-def generate_concepts_with_gemini(text, level):
-    """Use Gemini API for summarization, key concepts, and learning enhancement.
-        Now includes summarization and handles level.
-    """
+@app.route('/api/speech-error-analysis', methods=['POST'])
+@limiter.limit("5 per minute")  # Lower limit due to potential processing intensity
+def speech_error_analysis():
+    """Analyzes uploaded speech audio, using Gemini to enhance transcript analysis."""
     try:
-        # --- Construct the prompt ---
-        prompt = f"""
-        Please analyze this text and provide:
-        1. A summary of the text.  The summary should be concise but comprehensive.
-           - If the 'level' is 'high', aim for a very short summary (1-2 sentences).
-           - If the 'level' is 'medium', aim for a moderate-length summary (3-4 sentences).
-           - If the 'level' is 'low', you can provide a more detailed summary (5-7 sentences).
-        2. 6 key concepts as brief phrases (2-5 words each).
-        3. 3 learning focus points (1 sentence each).
-        4. 4 related topics that would complement this knowledge (short phrases).
+        if speech_client is None:
+            logger.error("Google Cloud Speech client not initialized")
+            return jsonify({'error': 'Speech analysis service unavailable'}), 503
 
-        Format your response as JSON with these exact keys:
-        "summary", "keyConcepts", "focusPoints", "relatedTopics"
+        if 'audio' not in request.files:
+            logger.warning("No audio file found in request")
+            return jsonify({'error': 'No audio file provided'}), 400
 
-        Compression Level: {level}
+        audio_file = request.files['audio']
+        if audio_file.filename == '':
+            logger.warning("No selected audio file")
+            return jsonify({'error': 'No selected audio file'}), 400
 
-        Text to analyze:
-        {text}
-        """
+        filename = secure_filename(audio_file.filename)
+        logger.info(f"Received audio file for analysis: {filename}")
 
-        response = gemini_model.generate_content(prompt)
+        transcript = None
+        errors = []  # Real error detection is complex, start with empty
+        fluency = {  # Placeholder fluency data
+            "score": 75,
+            "pace": "slightly fast",
+            "fillerWords": ["um", "uh"]
+        }
 
-        # --- Parse the response (with robust error handling) ---
+        # --- Actual Speech-to-Text ---
         try:
-            result_text = response.text
-            if '{' in result_text and '}' in result_text:
-                json_str = result_text[result_text.find('{'):result_text.rfind('}') + 1]
-                result = json.loads(json_str)
+            audio_content = audio_file.read()
+            audio = speech.RecognitionAudio(content=audio_content)
+            config = speech.RecognitionConfig(
+                encoding=speech.RecognitionConfig.AudioEncoding.LINEAR16,
+                language_code="en-US",
+            )
 
-                summary = result.get("summary", "Could not generate summary.")  # Provide default
-                key_concepts = result.get("keyConcepts", [])[:6]
-                focus_points = result.get("focusPoints", [])[:3]
-                related_topics = result.get("relatedTopics", [])[:4]
+            logger.info("Calling Google Cloud Speech-to-Text API")
+            response = speech_client.recognize(config=config, audio=audio)
 
-                return summary, key_concepts, focus_points, related_topics
+            if response.results:
+                transcript = response.results[0].alternatives[0].transcript
+                logger.info(f"Successfully transcribed audio. Transcript length: {len(transcript)}")
+            else:
+                logger.warning("Google Cloud Speech-to-Text returned no results.")
+                transcript = ""
 
-        except Exception as json_error:
-            logger.warning(f"Failed to parse JSON from Gemini: {str(json_error)}")
-            # Attempt fallback extraction (as in previous version)
-            #  ... (Code from previous version's fallback here) ...
-            content = response.text
-            sections = content.split('\n\n')
-            key_concepts = []
-            focus_points = []
-            related_topics = []
-            summary = None
+        except exceptions.GoogleAPICallError as e:
+            logger.error(f"Google Cloud Speech API call error: {str(e)}")
+            return jsonify({'error': f'Speech transcription failed: {str(e)}'}), 500
+        except Exception as e:
+            logger.error(f"Error during speech transcription: {str(e)}")
+            return jsonify({'error': 'Failed to process audio file'}), 500
 
-            for section in sections:
-                section_lower = section.lower()
-                if "summary" in section_lower:
-                    if summary is None:
-                        summary = section.replace("Summary:", "").strip()
-                if "key concept" in section_lower:
-                    lines = section.split('\n')
-                    key_concepts.extend([line.split(':', 1)[-1].split('-', 1)[-1].split('•', 1)[-1].strip() for line in lines if ':' in line or '-' in line or '•' in line])
-                elif "focus point" in section_lower or "learning point" in section_lower:
-                    lines = section.split('\n')
-                    focus_points.extend([line.split(':', 1)[-1].split('-', 1)[-1].split('•', 1)[-1].strip() for line in lines if ':' in line or '-' in line or '•' in line])
-                elif "related topic" in section_lower:
-                    lines = section.split('\n')
-                    related_topics.extend([line.split(':', 1)[-1].split('-', 1)[-1].split('•', 1)[-1].strip() for line in lines if ':' in line or '-' in line or '•' in line])
+        analysis_result = {
+            "transcript": transcript,
+            "errors": errors,  # Currently empty
+            "fluency": fluency  # Placeholder
+        }
 
-            key_concepts = key_concepts[:6]
-            focus_points = focus_points[:3]
-            related_topics = related_topics[:4]
+        # --- Enhance with Gemini if available ---
+        if gemini_available and gemini_model and transcript:  # Check if transcript exists
+            try:
+                logger.info("Attempting to enhance speech analysis with Gemini.")
+                fluency_details = json.dumps(analysis_result["fluency"])  # Send placeholder fluency
 
-            if summary is None:
-                summary = "Could not generate summary."
+                prompt = f"""
+                Review the following speech transcript.
+                Identify potential pronunciation errors, grammatical mistakes, or awkward phrasing within the transcript.
+                Also, provide general feedback on fluency based on the provided (placeholder) metrics.
 
-            if not key_concepts:
-                key_concepts = ["No key concepts identified."] * 6
-            if not focus_points:
-                focus_points = ["No focus points identified."] * 3
-            if not related_topics:
-                related_topics = ["No related topics identified"] * 4
+                Transcript: "{analysis_result['transcript']}"
 
-            return summary, key_concepts, focus_points, related_topics
+                Placeholder Fluency Metrics: {fluency_details}
 
+                Format your response as a JSON object with optional keys:
+                "identified_issues": A list of objects, each containing "id" (generate a unique UUID string), "issue" (the identified problematic word/phrase), "suggestion" (correction or improvement idea), and "explanation".
+                "fluency_feedback": A string containing overall fluency advice based on the transcript and metrics.
+
+                Example Response:
+                {{
+                  "identified_issues": [
+                    {{ "id": "{uuid.uuid4()}", "issue": "wreckonized", "suggestion": "recognized", "explanation": "Potential mispronunciation. Focus on the 'rec' sound." }}
+                  ],
+                  "fluency_feedback": "Your pace is slightly fast, which can sometimes impact clarity. Try taking brief pauses. Reducing filler words like 'um' will also help."
+                }}
+                """
+                response = gemini_model.generate_content(prompt)
+                result_text = response.text
+
+                # Attempt to parse JSON
+                if '{' in result_text and '}' in result_text:
+                    json_str = result_text[result_text.find('{'):result_text.rfind('}') + 1]
+                    gemini_feedback = json.loads(json_str)
+
+                    # Replace placeholder errors with Gemini's identified issues
+                    if "identified_issues" in gemini_feedback and isinstance(gemini_feedback["identified_issues"], list):
+                        analysis_result["errors"] = gemini_feedback["identified_issues"]  # Overwrite empty errors
+                        logger.info(f"Added {len(analysis_result['errors'])} issues identified by Gemini.")
+
+                    if "fluency_feedback" in gemini_feedback and isinstance(gemini_feedback["fluency_feedback"], str):
+                        analysis_result["fluency"]["feedback"] = gemini_feedback["fluency_feedback"]
+                        logger.info("Added fluency feedback from Gemini.")
+
+                else:
+                    logger.warning("Could not parse JSON feedback from Gemini for speech analysis.")
+
+            except Exception as e:
+                logger.error(f"Error during Gemini speech analysis enhancement: {str(e)}")
+
+        return jsonify(analysis_result)
 
     except Exception as e:
-        logger.error(f"Error in generate_concepts_with_gemini: {str(e)}")
-        raise  # Re-raise to trigger NLTK fallback
+        logger.error(f"Error in speech_error_analysis: {str(e)}")
+        logger.error(traceback.format_exc())
+        return jsonify({'error': f'Server error: {str(e)}'}), 500
 
 
-def generate_summary(text, level):
-    """NLTK-based text summarization (same as before, but used as fallback)."""
+@app.route('/api/image-to-text', methods=['POST'])
+@limiter.limit("10 per minute")  # Moderate limit for OCR
+def image_to_text():
+    """Extracts text from an uploaded image, prioritizing Gemini Vision (if available)."""
+    if vision_client is None:
+        logger.error("Google Cloud Vision client not initialized")
+        return jsonify({'error': 'Image analysis service unavailable'}), 503
     try:
-        sentences = sent_tokenize(text)
-        if not sentences:
-            logger.warning("No sentences found in text")
-            return "No content to summarize."
+        if 'image' not in request.files:
+            logger.warning("No image file found in request")
+            return jsonify({'error': 'No image file provided'}), 400
 
-        words = word_tokenize(text.lower())
-        stop_words = set(stopwords.words('english'))
-        words = [word for word in words if word is not None and word.isalnum() and word not in stop_words]
-        if not words:
-             logger.warning("No significant words found after filtering")
-             return "Content lacks significant terms for summarization."
+        image_file = request.files['image']
+        if image_file.filename == '':
+            logger.warning("No selected image file")
+            return jsonify({'error': 'No selected image file'}), 400
 
-        word_freq = FreqDist(words)
+        filename = secure_filename(image_file.filename)
+        logger.info(f"Received image file for OCR: {filename}")
 
-        sentence_scores = {}
-        for i, sentence in enumerate(sentences):
-            sentence_words = word_tokenize(sentence.lower())
-            sentence_words = [word for word in sentence_words if word isalnum() and word not in stop_words]
-            if len(sentence_words) == 0:
-                continue
+        extracted_text = None
 
-            score = sum(word_freq[word] for word in sentence_words) / len(sentence_words)
-            sentence_scores[i] = score
-        if not sentence_scores:
-             logger.warning("No sentences could be scored")
-             return "Unable to generate a meaningful summary."
-        if level == 'high':
-            num_sentences = max(1, int(len(sentences) * 0.2))
-        elif level == 'medium':
-            num_sentences = max(2, int(len(sentences) * 0.4))
-        else:  # low
-            num_sentences = max(3, int(len(sentences) * 0.6))
+        # --- Google Cloud Vision OCR ---
+        try:
+            image_content = image_file.read()
+            image = vision.Image(content=image_content)
 
-        summary_indices = nlargest(num_sentences, sentence_scores, key=sentence_scores.get)
+            logger.info("Calling Google Cloud Vision API for text detection")
+            response = vision_client.text_detection(image=image)
 
-        if not summary_indices:
-            logger.warning("Failed to select top sentences")
-            return "Summary generation failed."
-        summary_indices.sort()
-        summary = ' '.join([sentences[i] for i in summary_indices])
-        return summary
-    except Exception as e:
-        logger.error(f"Error in generate_summary: {str(e)}")
-        return "Error generating summary."
+            if response.error.message:
+                logger.error(f"Google Cloud Vision API error: {response.error.message}")
+                return jsonify({'error': f'Image analysis failed: {response.error.message}'}), 500
 
+            if response.text_annotations:
+                extracted_text = response.text_annotations[0].description
+                logger.info(f"Successfully extracted text from image. Length: {len(extracted_text)}")
+            else:
+                logger.warning("Google Cloud Vision found no text in the image.")
+                extracted_text = ""
 
-def extract_key_concepts(text, num_concepts=6):
-    """NLTK-based key concept extraction (Improved with POS tagging)."""
-    try:
-        stop_words = set(stopwords.words('english'))
-        words = word_tokenize(text.lower())
-        words = [word for word in words if word.isalnum() and word not in stop_words]
+        except Exception as e:
+            logger.error(f"Error during Google Cloud Vision OCR: {str(e)}")
+            return jsonify({'error': 'Failed to process image file'}), 500
 
-        if not words:
-            logger.warning("No significant words found for concept extraction")
-            return ["No key concepts identified"]
+        if extracted_text is None:
+            logger.error("Text extraction resulted in None.")  # Should ideally be caught above
+            return jsonify({"error": "Could not extract text from image"}), 500
 
-        # Use POS tagging to identify noun phrases
-        tagged_words = nltk.pos_tag(words)
-        # Define a grammar for noun phrases (NP)
-        grammar = r"""
-            NP: {<DT>?<JJ>*<NN.*>+}   # Chunk sequences of DT, JJ, NN
-                {<NNP>+}            # Chunk sequences of proper nouns
-        """
-        cp = RegexpParser(grammar)
-        tree = cp.parse(tagged_words)
-
-        noun_phrases = []
-        for subtree in tree.subtrees():
-            if subtree.label() == 'NP':
-                phrase = ' '.join(word for word, pos in subtree.leaves())
-                if len(phrase.split()) >= 2:  # Consider only phrases with 2+ words
-                    noun_phrases.append(phrase)
-
-        # Remove duplicates and get top phrases
-        unique_phrases = list(set(noun_phrases))
-
-        if not unique_phrases:
-            logger.warning("No phrases extracted")
-            return ["No key concepts identified"]
-        return unique_phrases[:num_concepts] if len(unique_phrases) >= num_concepts else unique_phrases
+        return jsonify({"extractedText": extracted_text})
 
     except Exception as e:
-        logger.error(f"Error in extract_key_concepts: {str(e)}")
-        return ["Error extracting key concepts"]
-
-def extract_phrase_around_word(sentence, word):
-    """Extract a meaningful phrase around the target word"""
-    try:
-        words = sentence.split()
-        word_pos = None
-
-        # Find position of word (case-insensitive)
-        for i, w in enumerate(words):
-            if word in w.lower():
-                word_pos = i
-                break
-
-        if word_pos is None:
-            return None
-
-        # Extract 3-5 words around the target word
-        start = max(0, word_pos - 2)
-        end = min(len(words), word_pos + 3)
-        phrase = ' '.join(words[start:end])
-
-        # Clean up phrase
-        phrase = re.sub(r'[^\w\s]', '', phrase).strip()
-        return phrase
-    except Exception as e:
-        logger.error(f"Error in extract_phrase_around_word: {str(e)}")
-        return None
-
-def generate_focus_points(text, key_concepts, num_points=3):
-    """Generate learning focus points based on key concepts"""
-    try:
-        sentences = sent_tokenize(text)
-        if not sentences:
-             logger.warning("No sentences found for focus points")
-             return ["Review the full text for key information"]
-
-        focus_sentences = []
-        for concept in key_concepts:
-            if not concept:
-                continue
-            for sentence in sentences:
-                if any(word in sentence.lower() for word in concept.lower().split()):
-                    focus_sentences.append(sentence)
-                    break
-        if len(focus_sentences) < num_points:
-            remaining = [s for s in sentences if s not in focus_sentences]
-            focus_sentences += remaining[:num_points - len(focus_sentences)]
-
-        if not focus_sentences:
-            logger.warning("No focus sentences generated")
-            return ["Focus on understanding the main concepts presented"]
-
-        focus_points = []
-        for sentence in focus_sentences[:num_points]:
-            point = simplify_sentence(sentence)
-            if point:
-                focus_points.append(point)
-
-        if not focus_points:
-            logger.warning("No focus points generated after simplification")
-            return ["Focus on understanding the main concepts presented"]
-
-        return focus_points
-    except Exception as e:
-        logger.error(f"Error in generate_focus_points: {str(e)}")
-        return ["Focus on understanding the core content"]
-
-def simplify_sentence(sentence):
-    """Create a simplified version of a sentence for a focus point"""
-    try:
-        parts = re.split(r'[,;:]', sentence)
-        if parts:
-            return parts[0].strip()
-        return sentence
-    except Exception as e:
-        logger.error(f"Error in simplify_sentence: {str(e)}")
-        return sentence
-
-def generate_related_topics(text, key_concepts, num_topics=4):
-    """Generate related topics based on text and key concepts"""
-    try:
-        topics = set()
-        domains = [
-            "biology", "chemistry", "physics", "mathematics", "history",
-            "geology", "astronomy", "ecology", "evolution", "genetics",
-            "cell biology", "anatomy", "physiology", "biochemistry",
-            "organic chemistry", "inorganic chemistry", "quantum physics",
-            "thermodynamics", "mechanics", "electromagnetism", "calculus",
-            "statistics", "algebra", "geometry", "world history",
-            "ancient history", "modern history", "geography", "economics",
-            "psychology", "sociology", "anthropology", "literature",
-            "linguistics", "computer science", "artificial intelligence",
-            "machine learning", "data science", "engineering", "medicine"
-        ]
-
-        text_lower = text.lower()
-        for domain in domains:
-            if domain in text_lower:
-                topics.add(domain.title())
-        for concept in key_concepts:
-            if not concept:
-                continue
-
-            words = concept.lower().split()
-            for domain in domains:
-                domain_words = domain.split()
-                if any(word in domain_words for word in words):
-                    topics.add(domain.title())
-
-        if len(topics) < num_topics:
-            default_topics = ["Theoretical Foundations", "Practical Applications",
-                            "Historical Development", "Modern Advances",
-                            "Research Methods", "Educational Approaches"]
-            topics.update(default_topics[:num_topics - len(topics)])
-
-        return list(topics)[:num_topics]
-    except Exception as e:
-        logger.error(f"Error in generate_related_topics: {str(e)}")
-        return ["General Knowledge", "Academic Study", "Further Reading", "Related Research"]
+        logger.error(f"Error in image_to_text: {str(e)}")
+        logger.error(traceback.format_exc())
+        return jsonify({'error': f'Server error: {str(e)}'}), 500
 
 
 # --- Health Check Endpoint ---
 @app.route('/api/health', methods=['GET'])
 def health_check():
-    status = "ok" if client is not None else "limited"
+    logger.info("Health check endpoint called")
+    status = "ok"  # Assume ok unless specific services fail
     version = "1.0.0"
 
     try:
@@ -614,22 +706,41 @@ def health_check():
         try:
             nltk.data.find('tokenizers/punkt')
             nltk.data.find('corpora/stopwords')
+            nltk.data.find('taggers/averaged_perceptron_tagger')  # Check tagger
+            nltk.data.find('corpora/wordnet')  # Check wordnet
         except LookupError:
             nltk_status = "missing_resources"
 
-        return jsonify({
+        tts_status = 'available' if tts_client is not None else 'unavailable'
+        stt_status = 'available' if speech_client is not None else 'unavailable'
+        ocr_status = 'available' if vision_client is not None else 'unavailable'
+        grammar_status = 'available' if lang_tool is not None else 'unavailable'
+        gemini_status = 'available' if gemini_available else 'unavailable'
+
+        if any(s == 'unavailable' for s in [tts_status, stt_status, ocr_status, grammar_status, gemini_status]):
+            status = "limited"
+            
+        # Add CORS headers explicitly for debugging
+        response = jsonify({
             'status': status,
             'version': version,
             'services': {
-                'tts': 'available' if client is not None else 'unavailable',
+                'tts': tts_status,
                 'nltk': nltk_status,
-                'gemini': 'available' if gemini_available else 'unavailable', # Add Gemini status
+                'gemini': gemini_status,
+                'speech_to_text': stt_status,
+                'ocr': ocr_status,
+                'grammar_check': grammar_status,
             },
             'timestamp': os.path.getmtime(__file__) if os.path.exists(__file__) else None
         })
+        
+        logger.info(f"Health check response: {status}")
+        return response
     except Exception as e:
         logger.error(f"Error in health check: {str(e)}")
         return jsonify({'status': 'error', 'error': str(e)}), 500
+
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))

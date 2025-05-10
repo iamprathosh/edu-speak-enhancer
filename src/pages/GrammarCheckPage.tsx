@@ -3,6 +3,7 @@ import { Link } from 'react-router-dom';
 import Header from '@/components/Header';
 import { useGrammarCheck } from '@/hooks/useGrammarCheck';
 import { useToast } from '@/hooks/use-toast';
+import { LoadingIndicator } from '@/components/ui/loading-indicator';
 
 const GrammarCheckPage = () => {
   const { 
@@ -156,7 +157,7 @@ const GrammarCheckPage = () => {
                 <div className="bg-white p-6 rounded-lg border border-slate-100 min-h-[200px]">
                   {isProcessing ? (
                     <div className="flex items-center justify-center h-[168px]">
-                      <div className="animate-spin rounded-full h-8 w-8 border-t-2 border-b-2 border-edumate-500"></div>
+                      <LoadingIndicator size="lg" text="Analyzing your text..." />
                     </div>
                   ) : isAnalyzed ? (
                     renderCorrectedText()
@@ -177,7 +178,7 @@ const GrammarCheckPage = () => {
                   
                   {isProcessing ? (
                     <div className="flex items-center justify-center py-12">
-                      <div className="animate-spin rounded-full h-8 w-8 border-t-2 border-b-2 border-edumate-500"></div>
+                      <LoadingIndicator size="md" />
                     </div>
                   ) : isAnalyzed ? (
                     <div className="space-y-4">

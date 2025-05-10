@@ -1,0 +1,139 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>Multi-Language Text-to-Speech Test</title>
+  <style>
+    body {
+      font-family: Arial, sans-serif;
+      max-width: 800px;
+      margin: 0 auto;
+      padding: 20px;
+      line-height: 1.6;
+    }
+    h1 {
+      color: #2563eb;
+    }
+    .test-section {
+      margin-bottom: 30px;
+      border: 1px solid #e5e7eb;
+      border-radius: 8px;
+      padding: 15px;
+    }
+    .language {
+      font-weight: bold;
+      color: #4b5563;
+    }
+    textarea {
+      width: 100%;
+      height: 100px;
+      margin: 10px 0;
+      padding: 8px;
+      border-radius: 4px;
+      border: 1px solid #d1d5db;
+    }
+    button {
+      background-color: #2563eb;
+      color: white;
+      border: none;
+      padding: 8px 16px;
+      border-radius: 4px;
+      cursor: pointer;
+      margin-right: 10px;
+    }
+    button:hover {
+      background-color: #1d4ed8;
+    }
+    #result {
+      margin-top: 20px;
+      padding: 15px;
+      background-color: #f9fafb;
+      border-radius: 4px;
+      min-height: 100px;
+    }
+    audio {
+      width: 100%;
+      margin-top: 10px;
+    }
+  </style>
+</head>
+<body>
+  <h1>Multi-Language Text-to-Speech Test</h1>
+  
+  <div class="test-section">
+    <h2>Test Multi-Language Detection</h2>
+    <p>Enter text with words from different languages to test the language detection feature.</p>
+    
+    <textarea id="testText">Hello bonjour hola. I speak English, je parle français, y hablo español también. Ich kann auch ein bisschen Deutsch sprechen.</textarea>
+    
+    <div>
+      <button id="testButton">Test Text-to-Speech</button>
+      <button id="clearButton">Clear</button>
+    </div>
+    
+    <div id="result">
+      <p>Results will appear here...</p>
+      <div id="audioContainer"></div>
+    </div>
+  </div>
+  
+  <div class="test-section">
+    <h2>Example Phrases</h2>
+    
+    <div>
+      <p><span class="language">English:</span> Hello, how are you today?</p>
+      <p><span class="language">French:</span> Bonjour, comment allez-vous aujourd'hui?</p>
+      <p><span class="language">Spanish:</span> Hola, ¿cómo estás hoy?</p>
+      <p><span class="language">German:</span> Hallo, wie geht es dir heute?</p>
+      <p><span class="language">Mixed:</span> Hello! Je m'appelle John. Vivo en España and I speak multiple languages.</p>
+    </div>
+  </div>
+
+  <script>
+    document.getElementById('testButton').addEventListener('click', async () => {
+      const text = document.getElementById('testText').value;
+      const resultDiv = document.getElementById('result');
+      const audioContainer = document.getElementById('audioContainer');
+      
+      resultDiv.innerHTML = '<p>Processing...</p>';
+      
+      try {
+        const response = await fetch('http://localhost:5000/api/texttospeech', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({ text }),
+        });
+        
+        if (!response.ok) {
+          throw new Error(`Error: ${response.status} ${response.statusText}`);
+        }
+        
+        const data = await response.json();
+        
+        if (data.audio_base64) {
+          resultDiv.innerHTML = '<p>Success! Audio generated:</p>';
+          
+          // Create audio element with base64 data
+          const audio = document.createElement('audio');
+          audio.controls = true;
+          audio.src = `data:audio/mp3;base64,${data.audio_base64}`;
+          
+          audioContainer.innerHTML = '';
+          audioContainer.appendChild(audio);
+        } else {
+          resultDiv.innerHTML = '<p>Error: No audio data received</p>';
+        }
+      } catch (error) {
+        resultDiv.innerHTML = `<p>Error: ${error.message}</p>`;
+      }
+    });
+    
+    document.getElementById('clearButton').addEventListener('click', () => {
+      document.getElementById('testText').value = '';
+      document.getElementById('result').innerHTML = '<p>Results will appear here...</p>';
+      document.getElementById('audioContainer').innerHTML = '';
+    });
+  </script>
+</body>
+</html>
