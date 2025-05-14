@@ -60,17 +60,18 @@ def test_page():
 gemini_available = False
 gemini_model = None
 if "GEMINI_API_KEY" in os.environ:
-    genai.configure(api_key=os.environ["GEMINI_API_KEY"])
     try:
-        gemini_model = genai.GenerativeModel('gemini-pro')
+        genai.configure(api_key=os.environ["GEMINI_API_KEY"])  # Configure once
+        gemini_model = genai.GenerativeModel('gemini-2.0-flash')  # Or 'gemini-1.5-flash' if preferred and available
+        # Quick test to see if the model is accessible
+        gemini_model.generate_content("test")
         gemini_available = True
-        logger.info("Gemini API initialized successfully")
+        logger.info("Gemini API initialized successfully with gemini-flash model.")
     except Exception as e:
-        logger.error(f"Failed to initialize Gemini API: {str(e)}")
-        # Don't exit; allow fallback to NLTK
+        logger.error(f"Failed to initialize Gemini API or model not accessible: {str(e)}")
+        logger.error(traceback.format_exc())  # Log full traceback
 else:
     logger.warning("GEMINI_API_KEY environment variable not set!")
-    logger.warning("Using NLTK fallback for summarization and concept extraction.")
 
 # Initialize Google Cloud TTS
 try:
@@ -483,91 +484,174 @@ def get_voices():
 
 
 @app.route('/api/grammar-check', methods=['POST'])
-@limiter.limit("20 per minute")  # Higher limit for potentially faster checks
-def grammar_check():
-    """Checks grammar for the provided text, prioritizing Gemini."""
-    try:
-        data = request.get_json()
-        if not data:
-            return jsonify({'error': 'Invalid request: No JSON data'}), 400
-        text = data.get('text', '').strip()
-        if not text:
-            return jsonify({'error': 'Text is required'}), 400
+@limiter.limit("20 per minute")
+def grammar_check_endpoint():
+    if not request.is_json:
+        return jsonify({"error": "Request must be JSON"}), 400
 
-        logger.info(f"Received grammar check request for text length: {len(text)}")
+    data = request.get_json()
+    text_to_check = data.get('text')
 
-        corrections = []
-        use_fallback = True
+    if not text_to_check:
+        return jsonify({"error": "No text provided for grammar check"}), 400
 
-        if gemini_available and gemini_model:
+    if not isinstance(text_to_check, str):
+        return jsonify({"error": "Text must be a string"}), 400
+
+    logger.info(f"Received grammar check request for text: '{text_to_check[:100]}...'")  # Log more text
+
+    corrections = []
+    # Prioritize Gemini if available
+    if gemini_available and gemini_model:
+        try:
+            prompt = f"""Please correct the grammar of the following text and provide explanations for each correction.
+            Respond ONLY with a valid JSON list of objects, where each object has 'original', 'corrected', and 'explanation' keys.
+            If a phrase is correct and needs no changes, omit it.
+            If the entire text is grammatically perfect, return an empty JSON list: [].
+            Do not attempt to correct stylistic choices unless they are grammatically incorrect.
+            Ensure the output is nothing but the JSON list, without any surrounding text, markdown, or explanations outside the JSON structure.
+
+            For example, if the input is 'I has a apple.', the output should be:
+            [
+                {{
+                    "original": "has",
+                    "corrected": "have",
+                    "explanation": "The subject 'I' requires the verb 'have'."
+                }},
+                {{
+                    "original": "a apple",
+                    "corrected": "an apple",
+                    "explanation": "Use 'an' before a vowel sound."
+                }}
+            ]
+
+            Text to correct:
+            "{text_to_check}"
+            """
+            logger.info("Sending request to Gemini for grammar check.")
+            # Using the new SDK structure
+            response = gemini_model.generate_content(prompt)
+            
+            # Debug: Print raw Gemini response text
+            logger.debug(f"Raw Gemini response text: {response.text}")
+
+            # Attempt to parse the JSON response from Gemini
             try:
-                logger.info("Attempting grammar check with Gemini.")
-                prompt = f"""
-                Analyze the following text for grammatical errors, spelling mistakes, and awkward phrasing.
-                Provide corrections and brief explanations.
-                Format your response as a JSON list, where each item is an object with these exact keys:
-                "id" (generate a unique UUID string),
-                "error" (the incorrect word or phrase),
-                "correction" (the suggested correction),
-                "explanation" (a brief explanation of the error),
-                "startIndex" (estimated 0-based start index of the error in the original text),
-                "endIndex" (estimated 0-based end index of the error in the original text).
-
-                If there are no errors, return an empty JSON list: [].
-
-                Text to analyze:
-                "{text}"
-                """
-                response = gemini_model.generate_content(prompt)
-                result_text = response.text
-
-                # Attempt to parse the JSON response
-                if '[' in result_text and ']' in result_text:
-                    json_str = result_text[result_text.find('['):result_text.rfind(']') + 1]
-                    parsed_corrections = json.loads(json_str)
-
-                    # Basic validation of the parsed structure
-                    if isinstance(parsed_corrections, list):
-                        corrections = parsed_corrections
-                        use_fallback = False
-                        logger.info(f"Successfully received and parsed {len(corrections)} corrections from Gemini.")
-                    else:
-                        logger.warning("Gemini response was not a valid JSON list.")
+                # The response.text should directly be the JSON string based on the prompt.
+                # Remove potential markdown backticks if Gemini still adds them despite instructions
+                cleaned_response_text = response.text.strip()
+                if cleaned_response_text.startswith("```json"):
+                    cleaned_response_text = cleaned_response_text[7:]
+                if cleaned_response_text.endswith("```"):
+                    cleaned_response_text = cleaned_response_text[:-3]
+                
+                gemini_corrections = json.loads(cleaned_response_text.strip())
+                
+                if isinstance(gemini_corrections, list):
+                    # Validate structure of corrections if needed here
+                    corrections = gemini_corrections
+                    logger.info(f"Successfully processed grammar check with Gemini. Found {len(corrections)} corrections.")
                 else:
-                    logger.warning("Could not find JSON list in Gemini response.")
+                    logger.warning(f"Gemini response was not a list as expected. Response: {gemini_corrections}")
+                    # Fallback logic can be triggered here if needed
+                    raise ValueError("Gemini response was not a list.")
 
-            except Exception as e:
-                logger.error(f"Error during Gemini grammar check: {str(e)}")
-                # Fallback will be used
-
-        if use_fallback:
-            if lang_tool:
-                logger.info("Using LanguageTool for grammar check fallback.")
-                try:
-                    matches = lang_tool.check(text)
+            except json.JSONDecodeError as e:
+                logger.error(f"Failed to parse Gemini JSON response: {e}")
+                logger.error(f"Problematic Gemini response text: {response.text}")
+                # Fallback to LanguageTool if Gemini response is not valid JSON
+                if lang_tool:
+                    logger.info("Falling back to LanguageTool due to Gemini JSON parsing error.")
+                    matches = lang_tool.check(text_to_check)
                     for match in matches:
-                        # Ensure there's at least one replacement suggestion
-                        correction = match.replacements[0] if match.replacements else text[match.offset:match.offset + match.errorLength]
-                        corrections.append({
-                            "id": f"gc_lt_{uuid.uuid4()}",
-                            "error": text[match.offset:match.offset + match.errorLength],
-                            "correction": correction,
-                            "explanation": match.message,
-                            "startIndex": match.offset,
-                            "endIndex": match.offset + match.errorLength
-                        })
-                    logger.info(f"Found {len(corrections)} potential issues using LanguageTool.")
-                except Exception as lt_error:
-                    logger.error(f"Error during LanguageTool check: {str(lt_error)}")
-            else:
-                logger.error("LanguageTool not available for fallback grammar check.")
- 
-        return jsonify(corrections)
+                        if match.replacements:
+                            corrections.append({
+                                "original": text_to_check[match.offset:match.offset+match.errorLength],
+                                "corrected": match.replacements[0],
+                                "explanation": match.message,
+                                "rule": match.ruleId
+                            })
+                    logger.info(f"Processed with LanguageTool fallback, found {len(corrections)} corrections.")
+                else:
+                    logger.warning("LanguageTool not available for fallback after JSON parsing error.")
+            except Exception as e:  # Catch other potential errors from Gemini processing
+                logger.error(f"An unexpected error occurred while processing Gemini response: {str(e)}")
+                logger.error(traceback.format_exc())
+                if lang_tool:  # Fallback for other errors
+                    logger.info("Falling back to LanguageTool due to an unexpected error with Gemini.")
+                    matches = lang_tool.check(text_to_check)
+                    for match in matches:
+                        if match.replacements:
+                            corrections.append({
+                                "original": text_to_check[match.offset:match.offset+match.errorLength],
+                                "corrected": match.replacements[0],
+                                "explanation": match.message,
+                                "rule": match.ruleId
+                            })
+                    logger.info(f"Processed with LanguageTool fallback, found {len(corrections)} corrections.")
+                else:
+                    logger.warning("LanguageTool not available for fallback after unexpected Gemini error.")
 
-    except Exception as e:
-        logger.error(f"Error in grammar_check: {str(e)}")
-        logger.error(traceback.format_exc())
-        return jsonify({'error': f'Server error: {str(e)}'}), 500
+        except exceptions.GoogleAPIError as e:  # This might need to be a more general google.api_core.exceptions.GoogleAPIError or specific genai exception
+            logger.error(f"Gemini API Error: {str(e)}")
+            logger.error(traceback.format_exc())
+            # Fallback to LanguageTool if Gemini API fails
+            if lang_tool:
+                logger.info("Falling back to LanguageTool due to Gemini API error.")
+                matches = lang_tool.check(text_to_check)
+                for match in matches:
+                    if match.replacements:
+                        corrections.append({
+                            "original": text_to_check[match.offset:match.offset+match.errorLength],
+                            "corrected": match.replacements[0],
+                            "explanation": match.message,
+                            "rule": match.ruleId
+                        })
+                logger.info(f"Processed with LanguageTool fallback, found {len(corrections)} corrections.")
+            else:
+                logger.warning("LanguageTool not available for fallback after Gemini API error.")
+        except Exception as e:
+            logger.error(f"Unexpected error during Gemini grammar check: {str(e)}")
+            logger.error(traceback.format_exc())
+            # Fallback for other unexpected errors
+            if lang_tool:
+                logger.info("Falling back to LanguageTool due to an unexpected error during Gemini call.")
+                matches = lang_tool.check(text_to_check)
+                for match in matches:
+                    if match.replacements:
+                        corrections.append({
+                            "original": text_to_check[match.offset:match.offset+match.errorLength],
+                            "corrected": match.replacements[0],
+                            "explanation": match.message,
+                            "rule": match.ruleId
+                        })
+                logger.info(f"Processed with LanguageTool fallback, found {len(corrections)} corrections.")
+            else:
+                logger.warning("LanguageTool not available for fallback after unexpected error.")
+
+    # If Gemini is not available or failed, and LanguageTool is available, use it
+    elif lang_tool:
+        logger.info("Using LanguageTool for grammar check (Gemini not available or failed).")
+        try:
+            matches = lang_tool.check(text_to_check)
+            for match in matches:
+                if match.replacements:  # Only add if there are suggestions
+                    corrections.append({
+                        "original": text_to_check[match.offset:match.offset+match.errorLength],
+                        "corrected": match.replacements[0],
+                        "explanation": match.message,
+                        "rule": match.ruleId
+                    })
+            logger.info(f"Processed with LanguageTool, found {len(corrections)} corrections.")
+        except Exception as e:
+            logger.error(f"Error during LanguageTool grammar check: {str(e)}")
+            logger.error(traceback.format_exc())
+            return jsonify({"error": "Error processing with LanguageTool"}), 500
+    else:
+        logger.warning("No grammar check tool (Gemini or LanguageTool) is available.")
+        return jsonify({"error": "Grammar check service not available"}), 503
+
+    return jsonify(corrections)
 
 
 @app.route('/api/speech-error-analysis', methods=['POST'])

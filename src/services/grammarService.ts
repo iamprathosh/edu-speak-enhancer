@@ -20,65 +20,26 @@ export const checkGrammar = (text: string): Promise<GrammarCorrection[]> => {
     })
     .then(response => {
       if (!response.ok) {
-        throw new Error('Failed to check grammar');
+        // If the response is not OK, try to parse the error message from the backend
+        return response.json().then(err => {
+          // Prefer backend error message if available
+          throw new Error(err.error || `Failed to check grammar. Status: ${response.status}`);
+        }).catch(() => {
+          // Fallback if error response is not JSON or other parsing issue
+          throw new Error(`Failed to check grammar. Status: ${response.status}`);
+        });
       }
       return response.json();
     })
     .then(data => {
-      resolve(data);
+      // Assuming the backend returns data in the GrammarCorrection[] format
+      // or an empty array if no corrections are needed / text is perfect.
+      resolve(data as GrammarCorrection[]);
     })
     .catch(error => {
       console.error('Error checking grammar:', error);
-      // Fallback to mock data if API fails
-      setTimeout(() => {
-        // This would be replaced with actual grammar checking API
-        // Using an example text for mock corrections
-        const sampleText = "I have recieved your letter last week and I will response as soon as possible. Me and my team are working hardly on this project.";
-        
-        if (text.includes(sampleText) || text.length > 20) {
-          resolve([
-            { 
-              original: "recieved", 
-              corrected: "received", 
-              explanation: "The correct spelling follows the rule 'i before e except after c'." 
-            },
-            { 
-              original: "last week", 
-              corrected: "last week", 
-              explanation: "When referring to a completed action in the past, use the simple past tense ('received') rather than the present perfect ('have received')." 
-            },
-            { 
-              original: "response", 
-              corrected: "respond", 
-              explanation: "'Response' is a noun, while 'respond' is the verb form needed in this context." 
-            },
-            { 
-              original: "Me and my team", 
-              corrected: "My team and I", 
-              explanation: "When referring to yourself and others, place yourself last and use the subject pronoun 'I' rather than the object pronoun 'me'." 
-            },
-            { 
-              original: "hardly", 
-              corrected: "hard", 
-              explanation: "'Hardly' means 'barely' or 'scarcely', while 'hard' is the intended adverb meaning 'with great effort'." 
-            }
-          ]);
-        } else {
-          // For short or different texts, return fewer corrections
-          resolve([
-            { 
-              original: "alot", 
-              corrected: "a lot", 
-              explanation: "'A lot' is always written as two words." 
-            },
-            { 
-              original: "their", 
-              corrected: "there", 
-              explanation: "'There' indicates a place, while 'their' indicates possession." 
-            }
-          ]);
-        }
-      }, 1000);
+      // Reject the promise with the error so the calling code can handle it
+      reject(error); 
     });
   });
 };
