@@ -1,8 +1,8 @@
 import { ArrowLeft, Mic, Play, SkipForward } from 'lucide-react';
 import { Link } from 'react-router-dom';
-import Header from '@/components/Header';
+import { Header } from '@/components/Header.tsx';
 import { useSpeechError } from '@/hooks/useSpeechError';
-import { practiceSentences, getErrorAudio } from '@/services/speechErrorService';
+import { practiceSentences } from '@/services/speechErrorService';
 import { useToast } from '@/hooks/use-toast';
 import { LoadingIndicator } from '@/components/ui/loading-indicator';
 

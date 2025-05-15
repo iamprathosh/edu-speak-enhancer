@@ -16,7 +16,8 @@ export const checkGrammar = (text: string): Promise<GrammarCorrection[]> => {
       headers: {
         'Content-Type': 'application/json',
       },
-      body: JSON.stringify({ text })
+      body: JSON.stringify({ text }),
+      credentials: 'include' // <<< Add this line
     })
     .then(response => {
       if (!response.ok) {

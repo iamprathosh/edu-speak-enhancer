@@ -1,0 +1,37 @@
+{
+    "teja": {
+        "password_hash": "scrypt:32768:8:1$Z1oWr6U3rMMFe0ue$a102d601f80abda84126e5ef585c687a922e3d2a85e3f5e29ef9f541b0f9e7726aead2e9fcb198e292f85bbe81a876de5638888144bd08c4c4483c83c6a5112f",
+        "history": [
+            {
+                "timestamp": "2025-05-15T12:28:39.044496Z",
+                "feature": "grammar_check",
+                "details": {
+                    "text_length": 129
+                }
+            },
+            {
+                "timestamp": "2025-05-15T12:41:52.492677Z",
+                "feature": "summarize_concept",
+                "details": {
+                    "concept_length": 13,
+                    "audience": "general",
+                    "level": "medium"
+                }
+            }
+        ]
+    },
+    "leodhas": {
+        "password_hash": "scrypt:32768:8:1$dk5tpFWamSbANb5U$6d9ea42f5da4b48463c7b6f2daf9158ceaf9cfdeb0428c1cfdae045334a9e2b9aba557d9f2e0edfd8f6ee4bae6970b7e41c2e2c6a0d5066d6c1ed68070a0adfc",
+        "history": [
+            {
+                "timestamp": "2025-05-15T12:43:44.980757Z",
+                "feature": "summarize_concept",
+                "details": {
+                    "concept_length": 1300,
+                    "audience": "general",
+                    "level": "medium"
+                }
+            }
+        ]
+    }
+}

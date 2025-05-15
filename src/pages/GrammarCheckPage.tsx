@@ -1,6 +1,6 @@
 import { ArrowLeft, FileText, Camera, CheckCircle, XCircle, Copy } from 'lucide-react';
 import { Link } from 'react-router-dom';
-import Header from '@/components/Header';
+import { Header } from '@/components/Header.tsx';
 import { useGrammarCheck } from '@/hooks/useGrammarCheck';
 import { useToast } from '@/hooks/use-toast';
 import { LoadingIndicator } from '@/components/ui/loading-indicator';

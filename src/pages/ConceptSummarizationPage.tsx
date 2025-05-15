@@ -1,6 +1,6 @@
 import { ArrowLeft, FileText, Download, Copy, ChevronsDown, ChevronsUp, BookOpen } from 'lucide-react';
 import { Link } from 'react-router-dom';
-import Header from '@/components/Header';
+import { Header } from '@/components/Header.tsx';
 import { useConceptSummarization } from '@/hooks/useConceptSummarization';
 import { CompressionLevel } from '@/services/conceptService';
 import { useToast } from '@/hooks/use-toast';
