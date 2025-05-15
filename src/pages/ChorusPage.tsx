@@ -1,7 +1,7 @@
 import { ArrowLeft, Mic, Play, Square, RefreshCw, Volume2, AlertCircle, ServerOff } from 'lucide-react';
 import { Link } from 'react-router-dom';
 import { useState, useRef, useEffect } from 'react';
-import Header from '@/components/Header';
+import { Header } from '@/components/Header.tsx';
 import { useVoiceRecording } from '@/hooks/useVoiceRecording';
 import { 
   practiceExamples, 

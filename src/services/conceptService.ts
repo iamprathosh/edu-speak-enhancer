@@ -25,10 +25,9 @@ Photosynthesis is vital for life on Earth as it maintains atmospheric oxygen lev
 Factors affecting the rate of photosynthesis include light intensity, carbon dioxide concentration, temperature, and water availability. Understanding these factors is important in agriculture for optimizing crop yields and in ecology for predicting how changes in environmental conditions might impact ecosystem productivity.`;
 
 // API-based concept summarization
-export const summarizeConcept = (text: string, level: CompressionLevel): Promise<SummarizedConcept> => {
-  return new Promise((resolve, reject) => {
-    // Call the backend API
-    fetch(getApiUrl('/api/summarize'), {
+export const summarizeConcept = async (text: string, level: CompressionLevel): Promise<SummarizedConcept> => {
+  try {
+    const response = await fetch(getApiUrl('/api/summarize_concept'), {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -36,38 +35,41 @@ export const summarizeConcept = (text: string, level: CompressionLevel): Promise
       body: JSON.stringify({
         text,
         level
-      })
-    })
-    .then(response => {
-      if (!response.ok) {
-        return response.json().then(data => {
-          throw new Error(data.error || `Failed with status: ${response.status}`);
-        }).catch(err => {
-          if (err instanceof SyntaxError) {
-            throw new Error(`Failed with status: ${response.status}`);
-          }
-          throw err;
-        });
+      }),
+      credentials: 'include'
+    });
+
+    if (!response.ok) {
+      let errorMessage = `API request failed with status ${response.status}`;
+      try {
+        const errorData = await response.json();
+        if (errorData && errorData.error) {
+          errorMessage = errorData.error;
+        }
+      } catch (jsonError) {
+        // Error response was not JSON or JSON parsing failed.
+        // Use statusText if available.
+        if (response.statusText) {
+            errorMessage = `${errorMessage}: ${response.statusText}`;
+        }
       }
-      return response.json();
-    })
-    .then(data => {
-      resolve(data);
-    })
-    .catch(error => {
-      console.error('Error summarizing text:', error);
-      // Fallback to mock data if API fails
+      throw new Error(errorMessage);
+    }
+
+    const data: SummarizedConcept = await response.json();
+    return data;
+
+  } catch (error) {
+    console.error('Error summarizing text:', error);
+    // Fallback to mock data if API fails, maintaining the original delay behavior
+    return new Promise((resolve) => {
       setTimeout(() => {
-        // This would be replaced with actual NLP API for summarization
-        // For now, return different pre-defined summaries based on compression level
-        
         let summary: string;
-        
         if (level === 'high') {
           summary = "Photosynthesis converts light energy into chemical energy (glucose) in plants and some microorganisms. The process occurs in chloroplasts, following the equation 6CO₂ + 6H₂O + light → C₆H₁₂O₆ + 6O₂. It involves light-dependent reactions (producing ATP, NADPH, and O₂) and the Calvin cycle (producing glucose). Photosynthesis is essential for atmospheric oxygen, the carbon cycle, and food chains.";
         } else if (level === 'medium') {
           summary = "Photosynthesis is the process where plants and certain microorganisms convert light energy into chemical energy as glucose. Occurring in chloroplasts containing chlorophyll, it follows the equation: 6CO₂ + 6H₂O + light → C₆H₁₂O₆ + 6O₂. The process has two stages: light-dependent reactions (producing ATP, NADPH, and oxygen) and the Calvin cycle (using ATP and NADPH to convert CO₂ to glucose). Photosynthesis maintains atmospheric oxygen levels, removes CO₂, and forms the base of food chains. Factors affecting its rate include light intensity, CO₂ concentration, temperature, and water availability.";
-        } else {
+        } else { // low
           summary = "Photosynthesis is the process by which plants, algae, and certain bacteria convert light energy into chemical energy in the form of glucose. This occurs in chloroplasts containing chlorophyll, which absorbs light energy primarily from blue and red spectrum parts. The chemical equation is 6CO₂ + 6H₂O + light energy → C₆H₁₂O₆ + 6O₂. The process has two stages: light-dependent reactions in thylakoid membranes (producing ATP, NADPH, and oxygen) and the Calvin cycle in the stroma (using ATP and NADPH to convert carbon dioxide to glucose). Photosynthesis is crucial for removing CO₂ from the atmosphere, maintaining oxygen levels for aerobic organisms, and providing energy to ecosystems as the base of food chains. Factors affecting photosynthesis rates include light intensity, carbon dioxide concentration, temperature, and water availability, which are important considerations in agriculture and ecology.";
         }
         
@@ -97,5 +99,5 @@ export const summarizeConcept = (text: string, level: CompressionLevel): Promise
         });
       }, 1500);
     });
-  });
+  }
 };

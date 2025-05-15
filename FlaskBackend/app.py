@@ -1,7 +1,7 @@
 import nltk
 import os
 import logging
-from flask import Flask, request, jsonify, send_file
+from flask import Flask, request, jsonify, send_file, session # Added session
 from flask_cors import CORS
 from google.cloud import texttospeech, speech, vision
 from google.api_core import exceptions
@@ -25,6 +25,9 @@ import language_tool_python  # Added for grammar check
 import uuid  # Added for generating unique IDs
 import base64
 from googletrans import Translator
+from werkzeug.security import generate_password_hash, check_password_hash # Added for password hashing
+import datetime # Added for timestamps
+from functools import wraps # Added for decorators
 
 # --- Configuration and Initialization (Same as previous, with additions) ---
 
@@ -40,7 +43,42 @@ load_dotenv()
 
 # Initialize Flask app
 app = Flask(__name__, static_folder='static')
-CORS(app, resources={r"/api/*": {"origins": "*"}}, supports_credentials=True)
+app.config['SECRET_KEY'] = os.environ.get('FLASK_SECRET_KEY', 'your_very_secret_key_here_change_me') # Added SECRET_KEY for sessions
+CORS(app, resources={r"/api/*": {"origins": "http://localhost:8080"}}, supports_credentials=True) # Ensure frontend origin is allowed and credentials supported
+
+# User data store
+USERS_FILE = os.path.join(os.path.dirname(__file__), 'users.json')
+
+def load_users():
+    if not os.path.exists(USERS_FILE):
+        with open(USERS_FILE, 'w') as f:
+            json.dump({}, f)
+        return {}
+    try:
+        with open(USERS_FILE, 'r') as f:
+            users = json.load(f)
+            # Ensure history is a list for each user
+            for username, data in users.items():
+                if 'history' not in data or not isinstance(data['history'], list):
+                    data['history'] = []
+            return users
+    except (json.JSONDecodeError, IOError) as e:
+        logger.error(f"Error loading users file: {e}")
+        # If file is corrupted or unreadable, start with an empty user set for this session
+        # and try to create/overwrite with an empty JSON object to fix it for next time.
+        try:
+            with open(USERS_FILE, 'w') as f:
+                json.dump({}, f)
+        except IOError as save_e:
+            logger.error(f"Could not even create/overwrite users.json: {save_e}")
+        return {}
+
+def save_users(users_data):
+    try:
+        with open(USERS_FILE, 'w') as f:
+            json.dump(users_data, f, indent=4)
+    except IOError as e:
+        logger.error(f"Error saving users file: {e}")
 
 # Initialize rate limiter
 limiter = Limiter(
@@ -55,6 +93,111 @@ limiter = Limiter(
 def test_page():
     logger.info("Test page requested")
     return app.send_static_file('test.html')
+
+# --- Authentication Decorator ---
+def login_required(f):
+    @wraps(f)
+    def decorated_function(*args, **kwargs):
+        if 'user_id' not in session:
+            return jsonify({'error': 'Authentication required'}), 401
+        return f(*args, **kwargs)
+    return decorated_function
+
+# --- User Authentication Endpoints ---
+@app.route('/api/register', methods=['POST'])
+def register():
+    data = request.get_json()
+    username = data.get('username')
+    password = data.get('password')
+
+    if not username or not password:
+        return jsonify({'error': 'Username and password are required'}), 400
+
+    users = load_users()
+    if username in users:
+        return jsonify({'error': 'Username already exists'}), 409 # 409 Conflict
+
+    users[username] = {
+        'password_hash': generate_password_hash(password),
+        'history': []
+    }
+    save_users(users)
+    session['user_id'] = username  # Log in the user upon registration
+    logger.info(f"User {username} registered successfully and logged in.")
+    # Return user object for consistency and immediate use by frontend
+    return jsonify({'message': 'User registered successfully', 'user': {'username': username}}), 201
+
+@app.route('/api/login', methods=['POST'])
+def login():
+    data = request.get_json()
+    username = data.get('username')
+    password = data.get('password')
+
+    if not username or not password:
+        return jsonify({'error': 'Username and password are required'}), 400
+
+    users = load_users()
+    user = users.get(username)
+
+    if not user or not check_password_hash(user['password_hash'], password):
+        return jsonify({'error': 'Invalid username or password'}), 401
+
+    session['user_id'] = username
+    logger.info(f"User {username} logged in successfully.")
+    return jsonify({'message': 'Login successful', 'user': {'username': username}}), 200
+
+@app.route('/api/logout', methods=['POST'])
+@login_required
+def logout():
+    user_id = session.pop('user_id', None)
+    if user_id:
+        logger.info(f"User {user_id} logged out.")
+    return jsonify({'message': 'Logout successful'}), 200
+
+@app.route('/api/me', methods=['GET'])
+@login_required
+def me():
+    user_id = session.get('user_id')
+    users = load_users()
+    user_data = users.get(user_id)
+    if not user_data: # Should not happen if @login_required works
+        return jsonify({'error': 'User not found'}), 404
+    return jsonify({'username': user_id, 'history_count': len(user_data.get('history', []))}), 200
+
+# --- History Management ---
+def add_user_history(username, feature, details):
+    users = load_users()
+    if username in users:
+        # Ensure history list exists
+        if 'history' not in users[username] or not isinstance(users[username]['history'], list):
+            users[username]['history'] = []
+        
+        history_entry = {
+            'timestamp': datetime.datetime.utcnow().isoformat() + 'Z', # ISO 8601 format
+            'feature': feature,
+            'details': details
+        }
+        users[username]['history'].append(history_entry)
+        # Optional: Limit history size
+        # max_history = 50 
+        # users[username]['history'] = users[username]['history'][-max_history:]
+        save_users(users)
+        logger.info(f"History added for user {username}, feature {feature}.")
+    else:
+        logger.warning(f"Attempted to add history for non-existent user {username}.")
+
+@app.route('/api/history', methods=['GET'])
+@login_required
+def get_history():
+    user_id = session.get('user_id')
+    users = load_users()
+    user_data = users.get(user_id)
+    if not user_data:
+        return jsonify({'error': 'User not found'}), 404 # Should be caught by @login_required
+    
+    # Sort history by timestamp descending (newest first)
+    user_history = sorted(user_data.get('history', []), key=lambda x: x['timestamp'], reverse=True)
+    return jsonify({'history': user_history}), 200
 
 # Initialize Gemini API (Prioritize)
 gemini_available = False
@@ -193,12 +336,42 @@ def handle_exception(e):
     }), 500
 
 
+# --- API Health Check ---
+@app.route('/api/health', methods=['GET'])
+def health_check():
+    logger.info("Health check endpoint hit")
+    # Check status of critical services (TTS, Speech-to-Text, Gemini, etc.)
+    services_status = {
+        "tts_google": "available" if tts_client else "unavailable",
+        "speech_to_text_google": "available" if speech_client else "unavailable",
+        "vision_google": "available" if vision_client else "unavailable",
+        "gemini_ai": "available" if gemini_available and gemini_model else "unavailable",
+        "language_tool": "available" if lang_tool else "unavailable"
+    }
+    # Overall status can be 'ok' if core services are up, or 'degraded'/'error'
+    # For simplicity, let's say 'ok' if at least Gemini and TTS are up.
+    # You can define more complex logic here.
+    if gemini_available and tts_client:
+        overall_status = "ok"
+    elif gemini_available or tts_client:
+        overall_status = "degraded"
+    else:
+        overall_status = "error"
+        
+    return jsonify({
+        "status": overall_status,
+        "timestamp": datetime.datetime.utcnow().isoformat() + 'Z',
+        "services": services_status
+    }), 200
+
 # --- API Endpoints ---
 
 @app.route('/api/tts_google', methods=['POST'])
 @limiter.limit("10 per minute")  # Apply rate limiting
+@login_required # Protect this endpoint
 def text_to_speech_google(): # Renamed to avoid conflict
-    logger.info("Received request for /api/tts (Google TTS)")
+    user_id = session.get('user_id') # Get current user
+    logger.info(f"User {user_id} requesting /api/tts (Google TTS)")
     if tts_client is None:
         logger.error("Google Cloud TTS client not initialized")
         return jsonify({'error': 'Text-to-speech service unavailable'}), 503
@@ -216,6 +389,9 @@ def text_to_speech_google(): # Renamed to avoid conflict
         if not text:
             logger.warning("Missing or empty 'text' field in request")
             return jsonify({'error': 'Text is required'}), 400
+
+        # Add to history
+        add_user_history(user_id, 'tts_google', {'text_length': len(text), 'voice_id': data.get('voiceId')})
 
         voice_id = data.get('voiceId', 'en-US-Standard-D')  # Default
         # Log parsed parameters
@@ -291,8 +467,10 @@ def text_to_speech_google(): # Renamed to avoid conflict
 
 @app.route('/api/speech-error-analysis', methods=['POST'])
 @limiter.limit("5 per minute")  # Lower limit due to potential processing intensity
+@login_required # Protect this endpoint
 def speech_error_analysis():
-    logger.info("Received request for /api/speech-error-analysis")
+    user_id = session.get('user_id') # Get current user
+    logger.info(f"User {user_id} requesting /api/speech-error-analysis")
     if not gemini_available or gemini_model is None:
         logger.error("Gemini API not available for speech error analysis")
         return jsonify({'error': 'Advanced speech analysis service is currently unavailable due to Gemini API issues.'}), 503
@@ -306,7 +484,10 @@ def speech_error_analysis():
 
     try:
         audio_bytes = audio_file.read()
-        logger.info(f"Audio file received: {filename}, size: {len(audio_bytes)} bytes")
+        logger.info(f"Audio file received: {filename}, size: {len(audio_bytes)} bytes for user {user_id}")
+
+        # Add to history (early, before potentially failing API calls)
+        add_user_history(user_id, 'speech_error_analysis', {'filename': filename, 'size': len(audio_bytes)})
 
         if not audio_bytes:
             logger.warning("Audio file is empty after reading from request.")
@@ -418,8 +599,10 @@ Transcript:
 
 @app.route('/api/texttospeech', methods=['POST'])
 @limiter.limit("10 per minute")
+@login_required # Protect this endpoint
 def text_to_speech_custom():
-    logger.info("Received request for /api/texttospeech (Multi-language TTS)")
+    user_id = session.get('user_id') # Get current user
+    logger.info(f"User {user_id} requesting /api/texttospeech (Multi-language TTS)")
     # Log the request headers for debugging
     logger.info(f"Request headers: {dict(request.headers)}")
     
@@ -440,7 +623,10 @@ def text_to_speech_custom():
             logger.warning("Missing or empty 'text' field in custom TTS request")
             return jsonify({'error': 'Text is required'}), 400
 
-        logger.info(f"Processing text for TTS: '{text}'")
+        # Add to history
+        add_user_history(user_id, 'texttospeech_custom', {'text_length': len(text)})
+
+        logger.info(f"Processing text for TTS: '{text}' for user {user_id}")
         words = text.split(' ')
         logger.info(f"Split into {len(words)} words")
         
@@ -551,7 +737,10 @@ def text_to_speech_custom():
 
 
 @app.route('/api/voices', methods=['GET'])
+@login_required # Protect this endpoint
 def get_voices():
+    user_id = session.get('user_id') # Get current user
+    logger.info(f"User {user_id} requesting /api/voices") # Log access
     if tts_client is None:
         logger.error("Google Cloud TTS client not initialized")
         return jsonify({'error': 'Voice service unavailable'}), 503
@@ -608,8 +797,15 @@ def get_voices():
 
 
 @app.route('/api/grammar-check', methods=['POST'])
-@limiter.limit("20 per minute")
-def grammar_check_endpoint():
+@limiter.limit("15 per minute") # Example: 15 requests per minute
+@login_required # Protect this endpoint
+def grammar_check():
+    user_id = session.get('user_id') # Get current user
+    logger.info(f"User {user_id} requesting /api/grammar_check")
+    if lang_tool is None:
+        logger.error("LanguageTool not initialized")
+        return jsonify({'error': 'Grammar check service unavailable'}), 503
+
     if not request.is_json:
         return jsonify({"error": "Request must be JSON"}), 400
 
@@ -621,6 +817,9 @@ def grammar_check_endpoint():
 
     if not isinstance(text_to_check, str):
         return jsonify({"error": "Text must be a string"}), 400
+
+    # Add to history
+    add_user_history(user_id, 'grammar_check', {'text_length': len(text_to_check)})
 
     logger.info(f"Received grammar check request for text: '{text_to_check[:100]}...'")  # Log more text
 
@@ -778,100 +977,49 @@ def grammar_check_endpoint():
     return jsonify(corrections)
 
 
-@app.route('/api/image-to-text', methods=['POST'])
-@limiter.limit("10 per minute")  # Moderate limit for OCR
-def image_to_text():
-    """Extracts text from an uploaded image, prioritizing Gemini Vision (if available)."""
-    if vision_client is None:
-        logger.error("Google Cloud Vision client not initialized")
-        return jsonify({'error': 'Image analysis service unavailable'}), 503
-    try:
-        if 'image' not in request.files:
-            logger.warning("No image file found in request")
-            return jsonify({'error': 'No image file provided'}), 400
-
-        image_file = request.files['image']
-        if image_file.filename == '':
-            logger.warning("No selected image file")
-            return jsonify({'error': 'No selected image file'}), 400
-
-        filename = secure_filename(image_file.filename)
-        logger.info(f"Received image file for OCR: {filename}")
-
-        extracted_text = None
-
-        # --- Google Cloud Vision OCR ---
-        try:
-            image_content = image_file.read()
-            image = vision.Image(content=image_content)
-
-            logger.info("Calling Google Cloud Vision API for text detection")
-            response = vision_client.text_detection(image=image)
-
-            if response.error.message:
-                logger.error(f"Google Cloud Vision API error: {response.error.message}")
-                return jsonify({'error': f'Image analysis failed: {response.error.message}'}), 500
-
-            if response.text_annotations:
-                extracted_text = response.text_annotations[0].description
-                logger.info(f"Successfully extracted text from image. Length: {len(extracted_text)}")
-            else:
-                logger.warning("Google Cloud Vision found no text in the image.")
-                extracted_text = ""
-
-        except Exception as e:
-            logger.error(f"Error during Google Cloud Vision OCR: {str(e)}")
-            return jsonify({'error': 'Failed to process image file'}), 500
-
-        if extracted_text is None:
-            logger.error("Text extraction resulted in None.")  # Should ideally be caught above
-            return jsonify({"error": "Could not extract text from image"}), 500
-
-        return jsonify({"extractedText": extracted_text})
-
-    except Exception as e:
-        logger.error(f"Error in image_to_text: {str(e)}")
-        logger.error(traceback.format_exc())
-        return jsonify({'error': f'Server error: {str(e)}'}), 500
-
-
-# --- Concept Summarization Endpoint ---
-@app.route('/api/summarize', methods=['POST'])
-@limiter.limit("10 per minute")
-def summarize_concept_endpoint():
-    if not gemini_available or not gemini_model:
+@app.route('/api/summarize_concept', methods=['POST'])
+@limiter.limit("5 per minute") # Example: 5 requests per minute
+@login_required # Protect this endpoint
+def summarize_concept_api():
+    user_id = session.get('user_id') # Get current user
+    logger.info(f"User {user_id} requesting /api/summarize_concept")
+    if not gemini_available or gemini_model is None:
         logger.error("Gemini API not available for summarization.")
         return jsonify({'error': 'Summarization service unavailable due to Gemini API issue'}), 503
 
     try:
         data = request.get_json()
-        text_to_summarize = data.get('text')
+        concept_text = data.get('text') # Changed 'concept' to 'text'
+        target_audience = data.get('audience', 'general') # Default to general audience
         compression_level = data.get('level', 'medium')  # Default to medium
 
-        if not text_to_summarize:
+        if not concept_text: # Changed 'concept' to 'concept_text'
             return jsonify({'error': 'No text provided for summarization'}), 400
+
+        # Add to history
+        add_user_history(user_id, 'summarize_concept', {'concept_length': len(concept_text), 'audience': target_audience, 'level': compression_level}) # Changed 'concept' to 'concept_text'
 
         # Tailor the prompt based on compression level
         if compression_level == 'high':
-            prompt = f"""Summarize the following text concisely. Identify up to 5 key concepts. Suggest 3-4 focus points for learning and 3-4 related topics.
-            Text: "{text_to_summarize}"
+            prompt = f"""Summarize the following concept text concisely for a {target_audience} audience. Identify up to 5 key concepts. Suggest 3-4 focus points for learning and 3-4 related topics.
+            Concept: "{concept_text}"
             Format your response as a JSON object with keys "summary", "keyConcepts" (list of strings), "learningEnhancement" (an object with "focusPoints" and "suggestedRelatedTopics" as lists of strings).
             Ensure the summary is very short and highly compressed.
             """
         elif compression_level == 'low':
-            prompt = f"""Provide a detailed summary of the following text. Identify 7-10 key concepts. Suggest 5-6 focus points for learning and 5-6 related topics.
-            Text: "{text_to_summarize}"
+            prompt = f"""Provide a detailed summary of the following concept text for a {target_audience} audience. Identify 7-10 key concepts. Suggest 5-6 focus points for learning and 5-6 related topics.
+            Concept: "{concept_text}"
             Format your response as a JSON object with keys "summary", "keyConcepts" (list of strings), "learningEnhancement" (an object with "focusPoints" and "suggestedRelatedTopics" as lists of strings).
             Ensure the summary is comprehensive and less compressed.
             """
         else:  # Medium compression
-            prompt = f"""Summarize the following text. Identify 5-7 key concepts. Suggest 4-5 focus points for learning and 4-5 related topics.
-            Text: "{text_to_summarize}"
+            prompt = f"""Summarize the following concept text for a {target_audience} audience. Identify 5-7 key concepts. Suggest 4-5 focus points for learning and 4-5 related topics.
+            Concept: "{concept_text}"
             Format your response as a JSON object with keys "summary", "keyConcepts" (list of strings), "learningEnhancement" (an object with "focusPoints" and "suggestedRelatedTopics" as lists of strings).
             The summary should be balanced in detail.
             """
 
-        logger.info(f"Generating summary with Gemini. Compression: {compression_level}. Text length: {len(text_to_summarize)}")
+        logger.info(f"Generating summary with Gemini. Compression: {compression_level}. Concept length: {len(concept_text)}")
         response = gemini_model.generate_content(prompt)
 
         # Attempt to parse the response as JSON
@@ -918,62 +1066,6 @@ def summarize_concept_endpoint():
         return jsonify(summary_data)
 
     except Exception as e:
-        logger.error(f"Error in summarize_concept_endpoint: {str(e)}")
+        logger.error(f"Error in summarize_concept_api: {str(e)}")
         logger.error(traceback.format_exc())
         return jsonify({'error': f'Server error: {str(e)}'}), 500
-
-
-# --- Health Check Endpoint ---
-@app.route('/api/health', methods=['GET'])
-def health_check():
-    logger.info("Health check endpoint called")
-    status = "ok"  # Assume ok unless specific services fail
-    version = "1.0.0"
-
-    try:
-        nltk_status = "ok"
-        try:
-            nltk.data.find('tokenizers/punkt')
-            nltk.data.find('corpora/stopwords')
-            nltk.data.find('taggers/averaged_perceptron_tagger')  # Check tagger
-            nltk.data.find('corpora/wordnet')  # Check wordnet
-        except LookupError:
-            nltk_status = "missing_resources"
-
-        tts_status = 'available' if tts_client is not None else 'unavailable'
-        stt_status = 'available' if speech_client is not None else 'unavailable'
-        ocr_status = 'available' if vision_client is not None else 'unavailable'
-        grammar_status = 'available' if lang_tool is not None else 'unavailable'
-        gemini_status = 'available' if gemini_available else 'unavailable'
-
-        if any(s == 'unavailable' for s in [tts_status, stt_status, ocr_status, grammar_status, gemini_status]):
-            status = "limited"
-            
-        # Add CORS headers explicitly for debugging
-        response = jsonify({
-            'status': status,
-            'version': version,
-            'services': {
-                'tts': tts_status,
-                'nltk': nltk_status,
-                'gemini': gemini_status,
-                'speech_to_text': stt_status,
-                'ocr': ocr_status,
-                'grammar_check': grammar_status,
-            },
-            'timestamp': os.path.getmtime(__file__) if os.path.exists(__file__) else None
-        })
-        
-        logger.info(f"Health check response: {status}")
-        return response
-    except Exception as e:
-        logger.error(f"Error in health check: {str(e)}")
-        return jsonify({'status': 'error', 'error': str(e)}), 500
-
-
-if __name__ == "__main__":
-    port = int(os.environ.get("PORT", 5000))
-    debug_mode = os.environ.get("FLASK_DEBUG", "False").lower() in ('true', '1', 't')
-
-    logger.info(f"Starting Flask app on port {port} with debug={debug_mode}")
-    app.run(host="0.0.0.0", port=port, debug=debug_mode)
