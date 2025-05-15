@@ -62,14 +62,11 @@ gemini_model = None
 if "GEMINI_API_KEY" in os.environ:
     try:
         genai.configure(api_key=os.environ["GEMINI_API_KEY"])  # Configure once
-        gemini_model = genai.GenerativeModel('gemini-2.0-flash')  # Or 'gemini-1.5-flash' if preferred and available
-        # Quick test to see if the model is accessible
-        gemini_model.generate_content("test")
+        gemini_model = genai.GenerativeModel('gemini-2.0-flash')  # Updated model initialization
         gemini_available = True
-        logger.info("Gemini API initialized successfully with gemini-flash model.")
+        logger.info("Gemini API initialized successfully with gemini-2.0-flash model.")
     except Exception as e:
-        logger.error(f"Failed to initialize Gemini API or model not accessible: {str(e)}")
-        logger.error(traceback.format_exc())  # Log full traceback
+        logger.error(f"Failed to initialize Gemini API: {str(e)}")
 else:
     logger.warning("GEMINI_API_KEY environment variable not set!")
 
@@ -290,6 +287,133 @@ def text_to_speech_google(): # Renamed to avoid conflict
         # Log any other unexpected errors in the main try block
         logger.error(f"Unhandled error in text_to_speech_google function: {str(e)}", exc_info=True)
         return jsonify({'error': f'Server error: {str(e)}'}), 500
+
+
+@app.route('/api/speech-error-analysis', methods=['POST'])
+@limiter.limit("5 per minute")  # Lower limit due to potential processing intensity
+def speech_error_analysis():
+    logger.info("Received request for /api/speech-error-analysis")
+    if not gemini_available or gemini_model is None:
+        logger.error("Gemini API not available for speech error analysis")
+        return jsonify({'error': 'Advanced speech analysis service is currently unavailable due to Gemini API issues.'}), 503
+
+    if 'audio' not in request.files:
+        logger.warning("No audio file provided in request")
+        return jsonify({'error': 'No audio file provided'}), 400
+
+    audio_file = request.files['audio']
+    filename = secure_filename(audio_file.filename if audio_file.filename else "audio_data.webm")
+
+    try:
+        audio_bytes = audio_file.read()
+        logger.info(f"Audio file received: {filename}, size: {len(audio_bytes)} bytes")
+
+        if not audio_bytes:
+            logger.warning("Audio file is empty after reading from request.")
+            return jsonify({'error': 'Audio file is empty or could not be read from the request.'}), 400
+
+        transcript = None
+        if speech_client:
+            audio = speech.RecognitionAudio(content=audio_bytes)
+            config = speech.RecognitionConfig(
+                encoding=speech.RecognitionConfig.AudioEncoding.WEBM_OPUS, # Ensure frontend sends compatible format
+                sample_rate_hertz=48000, # Ensure frontend sends compatible sample rate or make this flexible
+                language_code="en-US",
+                enable_automatic_punctuation=True
+            )
+            logger.info("Sending audio to Google Speech-to-Text API for transcription")
+            try:
+                response = speech_client.recognize(config=config, audio=audio)
+                if not response.results or not response.results[0].alternatives:
+                    logger.warning("Speech-to-Text API returned no transcription.")
+                    return jsonify({'error': 'Speech-to-Text API returned no transcription.'}), 500
+                transcript = response.results[0].alternatives[0].transcript
+                logger.info(f"Transcript: {transcript}")
+            except exceptions.GoogleAPICallError as e:
+                logger.error(f"Google Speech-to-Text API error: {str(e)}")
+                return jsonify({'error': f'Google Speech-to-Text API error: {str(e)}'}), 500
+        else:
+            logger.error("Speech client not available for transcription.")
+            return jsonify({'error': 'Speech transcription service not available.'}), 503
+
+        if transcript is None: # Should not happen if previous checks are correct, but as a safeguard
+            logger.error("Transcription resulted in None unexpectedly.")
+            return jsonify({'error': 'Failed to obtain transcript.'}), 500
+
+        prompt = f"""Analyze the following spoken sentence for pronunciation errors: "{transcript}".
+Provide a detailed analysis of any mispronounced words.
+For each mispronounced word, identify the word, suggest the correct pronunciation (phonetically if possible),
+and explain the error.
+The user was attempting to say the sentence. The audio quality might vary.
+Focus on common pronunciation mistakes for an English language learner.
+
+If no significant errors are found, state that the pronunciation is good.
+
+Format the output as a JSON object with the following structure:
+{{
+  "sentence": "The original transcribed sentence.",
+  "errorWords": ["word1", "word2", ...],
+  "errors": {{
+    "word1": {{
+      "word": "word1",
+      "correctPronunciation": "kəˈrɛkt prəˌnʌnsiˈeɪʃən",
+      "userPronunciation": "how the user might have said it (descriptive)",
+      "explanation": "Detailed explanation of the error and how to correct it."
+    }}
+  }}
+}}
+
+If no errors:
+{{
+  "sentence": "The original transcribed sentence.",
+  "errorWords": [],
+  "errors": {{}}
+}}
+
+Transcript:
+{transcript}
+"""
+        logger.info("Sending transcript to Gemini for error analysis.")
+        gemini_response = gemini_model.generate_content(prompt) # Renamed to gemini_response to avoid conflict
+
+        logger.info(f"Raw Gemini response: {gemini_response.text}")
+
+        try:
+            response_text = gemini_response.text.strip()
+            # Strip markdown code block if present
+            if response_text.startswith("```json") and response_text.endswith("```"):
+                response_text = response_text[len("```json"):-len("```")].strip()
+            elif response_text.startswith("```") and response_text.endswith("```"): # Handle generic markdown code block
+                response_text = response_text[len("```"):-len("```")].strip()
+            
+            # Ensure the text is not empty after stripping
+            if not response_text:
+                logger.error("Gemini response is empty after stripping markdown.")
+                return jsonify({'error': 'AI service returned an empty response after stripping markdown.'}), 500
+
+            analysis_result = json.loads(response_text)
+        except json.JSONDecodeError as e:
+            logger.error(f"Failed to parse Gemini response as JSON: {e}")
+            logger.error(f"Problematic Gemini response text (after attempting to strip markdown): {response_text[:500]}...") # Log the text that failed
+            return jsonify({'error': 'Failed to parse analysis from AI service. The response was not valid JSON.'}), 500
+
+        if not isinstance(analysis_result, dict) or \
+           'sentence' not in analysis_result or \
+           'errorWords' not in analysis_result or \
+           'errors' not in analysis_result:
+            logger.error(f"Gemini response is not in the expected format: {analysis_result}")
+            return jsonify({'error': 'AI service returned analysis in an unexpected format.'}), 500
+            
+        logger.info(f"Speech error analysis successful: {analysis_result}")
+        return jsonify(analysis_result)
+
+    except exceptions.GoogleAPICallError as e: # Catches Google API errors not caught by inner try-except (e.g. from Gemini if it uses Google infra)
+        logger.error(f"A Google API call error occurred during speech error analysis: {str(e)}", exc_info=True)
+        return jsonify({'error': f'A Google API call error occurred: {str(e)}'}), 500
+    except Exception as e:
+        logger.error(f"Unexpected error during speech error analysis: {str(e)}")
+        logger.error(traceback.format_exc())
+        return jsonify({'error': f'An unexpected internal server error occurred during analysis.'}), 500
 
 
 @app.route('/api/texttospeech', methods=['POST'])
@@ -654,125 +778,6 @@ def grammar_check_endpoint():
     return jsonify(corrections)
 
 
-@app.route('/api/speech-error-analysis', methods=['POST'])
-@limiter.limit("5 per minute")  # Lower limit due to potential processing intensity
-def speech_error_analysis():
-    """Analyzes uploaded speech audio, using Gemini to enhance transcript analysis."""
-    try:
-        if speech_client is None:
-            logger.error("Google Cloud Speech client not initialized")
-            return jsonify({'error': 'Speech analysis service unavailable'}), 503
-
-        if 'audio' not in request.files:
-            logger.warning("No audio file found in request")
-            return jsonify({'error': 'No audio file provided'}), 400
-
-        audio_file = request.files['audio']
-        if audio_file.filename == '':
-            logger.warning("No selected audio file")
-            return jsonify({'error': 'No selected audio file'}), 400
-
-        filename = secure_filename(audio_file.filename)
-        logger.info(f"Received audio file for analysis: {filename}")
-
-        transcript = None
-        errors = []  # Real error detection is complex, start with empty
-        fluency = {  # Placeholder fluency data
-            "score": 75,
-            "pace": "slightly fast",
-            "fillerWords": ["um", "uh"]
-        }
-
-        # --- Actual Speech-to-Text ---
-        try:
-            audio_content = audio_file.read()
-            audio = speech.RecognitionAudio(content=audio_content)
-            config = speech.RecognitionConfig(
-                encoding=speech.RecognitionConfig.AudioEncoding.LINEAR16,
-                language_code="en-US",
-            )
-
-            logger.info("Calling Google Cloud Speech-to-Text API")
-            response = speech_client.recognize(config=config, audio=audio)
-
-            if response.results:
-                transcript = response.results[0].alternatives[0].transcript
-                logger.info(f"Successfully transcribed audio. Transcript length: {len(transcript)}")
-            else:
-                logger.warning("Google Cloud Speech-to-Text returned no results.")
-                transcript = ""
-
-        except exceptions.GoogleAPICallError as e:
-            logger.error(f"Google Cloud Speech API call error: {str(e)}")
-            return jsonify({'error': f'Speech transcription failed: {str(e)}'}), 500
-        except Exception as e:
-            logger.error(f"Error during speech transcription: {str(e)}")
-            return jsonify({'error': 'Failed to process audio file'}), 500
-
-        analysis_result = {
-            "transcript": transcript,
-            "errors": errors,  # Currently empty
-            "fluency": fluency  # Placeholder
-        }
-
-        # --- Enhance with Gemini if available ---
-        if gemini_available and gemini_model and transcript:  # Check if transcript exists
-            try:
-                logger.info("Attempting to enhance speech analysis with Gemini.")
-                fluency_details = json.dumps(analysis_result["fluency"])  # Send placeholder fluency
-
-                prompt = f"""
-                Review the following speech transcript.
-                Identify potential pronunciation errors, grammatical mistakes, or awkward phrasing within the transcript.
-                Also, provide general feedback on fluency based on the provided (placeholder) metrics.
-
-                Transcript: "{analysis_result['transcript']}"
-
-                Placeholder Fluency Metrics: {fluency_details}
-
-                Format your response as a JSON object with optional keys:
-                "identified_issues": A list of objects, each containing "id" (generate a unique UUID string), "issue" (the identified problematic word/phrase), "suggestion" (correction or improvement idea), and "explanation".
-                "fluency_feedback": A string containing overall fluency advice based on the transcript and metrics.
-
-                Example Response:
-                {{
-                  "identified_issues": [
-                    {{ "id": "{uuid.uuid4()}", "issue": "wreckonized", "suggestion": "recognized", "explanation": "Potential mispronunciation. Focus on the 'rec' sound." }}
-                  ],
-                  "fluency_feedback": "Your pace is slightly fast, which can sometimes impact clarity. Try taking brief pauses. Reducing filler words like 'um' will also help."
-                }}
-                """
-                response = gemini_model.generate_content(prompt)
-                result_text = response.text
-
-                # Attempt to parse JSON
-                if '{' in result_text and '}' in result_text:
-                    json_str = result_text[result_text.find('{'):result_text.rfind('}') + 1]
-                    gemini_feedback = json.loads(json_str)
-
-                    # Replace placeholder errors with Gemini's identified issues
-                    if "identified_issues" in gemini_feedback and isinstance(gemini_feedback["identified_issues"], list):
-                        analysis_result["errors"] = gemini_feedback["identified_issues"]  # Overwrite empty errors
-                        logger.info(f"Added {len(analysis_result['errors'])} issues identified by Gemini.")
-
-                    if "fluency_feedback" in gemini_feedback and isinstance(gemini_feedback["fluency_feedback"], str):
-                        analysis_result["fluency"]["feedback"] = gemini_feedback["fluency_feedback"]
-                        logger.info("Added fluency feedback from Gemini.")
-
-                else:
-                    logger.warning("Could not parse JSON feedback from Gemini for speech analysis.")
-
-            except Exception as e:
-                logger.error(f"Error during Gemini speech analysis enhancement: {str(e)}")
-
-        return jsonify(analysis_result)
-
-    except Exception as e:
-        logger.error(f"Error in speech_error_analysis: {str(e)}")
-        logger.error(traceback.format_exc())
-        return jsonify({'error': f'Server error: {str(e)}'}), 500
-
-
 @app.route('/api/image-to-text', methods=['POST'])
 @limiter.limit("10 per minute")  # Moderate limit for OCR
 def image_to_text():
@@ -826,6 +831,94 @@ def image_to_text():
 
     except Exception as e:
         logger.error(f"Error in image_to_text: {str(e)}")
+        logger.error(traceback.format_exc())
+        return jsonify({'error': f'Server error: {str(e)}'}), 500
+
+
+# --- Concept Summarization Endpoint ---
+@app.route('/api/summarize', methods=['POST'])
+@limiter.limit("10 per minute")
+def summarize_concept_endpoint():
+    if not gemini_available or not gemini_model:
+        logger.error("Gemini API not available for summarization.")
+        return jsonify({'error': 'Summarization service unavailable due to Gemini API issue'}), 503
+
+    try:
+        data = request.get_json()
+        text_to_summarize = data.get('text')
+        compression_level = data.get('level', 'medium')  # Default to medium
+
+        if not text_to_summarize:
+            return jsonify({'error': 'No text provided for summarization'}), 400
+
+        # Tailor the prompt based on compression level
+        if compression_level == 'high':
+            prompt = f"""Summarize the following text concisely. Identify up to 5 key concepts. Suggest 3-4 focus points for learning and 3-4 related topics.
+            Text: "{text_to_summarize}"
+            Format your response as a JSON object with keys "summary", "keyConcepts" (list of strings), "learningEnhancement" (an object with "focusPoints" and "suggestedRelatedTopics" as lists of strings).
+            Ensure the summary is very short and highly compressed.
+            """
+        elif compression_level == 'low':
+            prompt = f"""Provide a detailed summary of the following text. Identify 7-10 key concepts. Suggest 5-6 focus points for learning and 5-6 related topics.
+            Text: "{text_to_summarize}"
+            Format your response as a JSON object with keys "summary", "keyConcepts" (list of strings), "learningEnhancement" (an object with "focusPoints" and "suggestedRelatedTopics" as lists of strings).
+            Ensure the summary is comprehensive and less compressed.
+            """
+        else:  # Medium compression
+            prompt = f"""Summarize the following text. Identify 5-7 key concepts. Suggest 4-5 focus points for learning and 4-5 related topics.
+            Text: "{text_to_summarize}"
+            Format your response as a JSON object with keys "summary", "keyConcepts" (list of strings), "learningEnhancement" (an object with "focusPoints" and "suggestedRelatedTopics" as lists of strings).
+            The summary should be balanced in detail.
+            """
+
+        logger.info(f"Generating summary with Gemini. Compression: {compression_level}. Text length: {len(text_to_summarize)}")
+        response = gemini_model.generate_content(prompt)
+
+        # Attempt to parse the response as JSON
+        try:
+            # It's common for the API to return markdown with a JSON block.
+            # We need to extract the JSON part.
+            response_text = response.text
+            # Find the start and end of the JSON block
+            json_start_index = response_text.find('{')
+            json_end_index = response_text.rfind('}') + 1
+
+            if json_start_index != -1 and json_end_index != -1:
+                json_string = response_text[json_start_index:json_end_index]
+                summary_data = json.loads(json_string)
+                logger.info("Successfully parsed Gemini response as JSON.")
+            else:
+                logger.error(f"Could not find JSON in Gemini response: {response_text}")
+                # Fallback: try to create a basic summary if JSON parsing fails
+                summary_data = {
+                    "summary": response_text, # Use the whole text as summary
+                    "keyConcepts": ["Could not extract key concepts"],
+                    "learningEnhancement": {
+                        "focusPoints": ["Unable to determine focus points"],
+                        "suggestedRelatedTopics": ["Unable to determine related topics"]
+                    }
+                }
+
+        except json.JSONDecodeError as e:
+            logger.error(f"Failed to parse Gemini response as JSON: {str(e)}. Response text: {response.text}")
+            # Fallback if JSON parsing fails
+            summary_data = {
+                "summary": response.text, # Use the whole text as summary
+                "keyConcepts": ["Failed to parse key concepts from model output"],
+                "learningEnhancement": {
+                    "focusPoints": ["Failed to parse focus points"],
+                    "suggestedRelatedTopics": ["Failed to parse related topics"]
+                }
+            }
+        except Exception as e: # Catch other potential errors with the response object
+            logger.error(f"Error processing Gemini response: {str(e)}. Response: {response}")
+            return jsonify({'error': f'Error processing Gemini response: {str(e)}'}), 500
+
+
+        return jsonify(summary_data)
+
+    except Exception as e:
+        logger.error(f"Error in summarize_concept_endpoint: {str(e)}")
         logger.error(traceback.format_exc())
         return jsonify({'error': f'Server error: {str(e)}'}), 500
 

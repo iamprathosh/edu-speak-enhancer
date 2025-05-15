@@ -1,4 +1,5 @@
 import { getApiUrl } from './backendConfig';
+import { getGoogleTTSAudio } from './speechService'; // Import actual TTS function
 
 // Mock data for speech error analysis
 interface SpeechError {
@@ -40,9 +41,17 @@ export const analyzeErrors = async (recordingBlob: Blob): Promise<SpeechErrorAna
   return await response.json();
 };
 
-// Simulate text-to-speech functionality for correct pronunciation
-export const getErrorAudio = (word: string, isCorrect: boolean): string => {
-  // In a real implementation, this would generate or fetch audio files
-  // For now, we'll just return a mock URL
-  return `https://api.example.com/tts?text=${encodeURIComponent(word)}&isCorrect=${isCorrect}`;
+// Fetches text-to-speech audio for the correct pronunciation of a word
+export const getCorrectPronunciationAudio = async (word: string): Promise<Blob | null> => {
+  if (!word) return null;
+  try {
+    // Using a default voice and speed. These could be made configurable if needed.
+    const audioBlob = await getGoogleTTSAudio(word, 'en-US-Wavenet-A', 1.0);
+    return audioBlob;
+  } catch (error) {
+    console.error(`Error fetching TTS audio for "${word}":`, error);
+    // Depending on desired error handling, you might want to throw the error
+    // or return null to be handled by the caller.
+    return null;
+  }
 };
