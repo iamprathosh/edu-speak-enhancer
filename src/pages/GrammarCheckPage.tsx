@@ -1,4 +1,4 @@
-import { ArrowLeft, FileText, Camera, CheckCircle, XCircle, Copy } from 'lucide-react';
+import { ArrowLeft, FileText, Camera, CheckCircle, XCircle, Copy, Volume2 } from 'lucide-react';
 import { Link } from 'react-router-dom';
 import { Header } from '@/components/Header.tsx';
 import { useGrammarCheck } from '@/hooks/useGrammarCheck';
@@ -14,15 +14,17 @@ const GrammarCheckPage = () => {
     isProcessing,
     analyzeText,
     uploadImage,
-    correctedText
+    correctedText,
+    audioBase64
   } = useGrammarCheck();
   
   const { toast } = useToast();
   
-  const handleImageUpload = () => {
-    // Simulate file selection with a mock file
-    const mockFile = new File([""], "sample-image.jpg", { type: "image/jpeg" });
-    uploadImage(mockFile);
+  const handleImageUpload = (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    if (file) {
+      uploadImage(file);
+    }
   };
   
   const handleCopyText = () => {
@@ -87,16 +89,23 @@ const GrammarCheckPage = () => {
                 <div className="flex justify-between items-center mb-6">
                   <h3 className="text-xl font-medium text-edumate-900">Input Text</h3>
                   <div className="flex space-x-2">
-                    <button 
-                      onClick={handleImageUpload}
-                      disabled={isProcessing}
+                    <label 
+                      htmlFor="image-upload"
                       className={`p-2 text-slate-600 hover:text-edumate-600 hover:bg-edumate-50 rounded-lg transition-colors ${
                         isProcessing ? 'opacity-50 cursor-not-allowed' : ''
                       }`}
                       title="Upload image with text"
                     >
                       <Camera className="w-5 h-5" />
-                    </button>
+                      <input 
+                        type="file" 
+                        id="image-upload" 
+                        accept="image/*" 
+                        onChange={handleImageUpload} 
+                        className="hidden"
+                        disabled={isProcessing}
+                      />
+                    </label>
                     <button 
                       disabled={isProcessing}
                       className={`p-2 text-slate-600 hover:text-edumate-600 hover:bg-edumate-50 rounded-lg transition-colors ${
@@ -222,6 +231,24 @@ const GrammarCheckPage = () => {
                         <FileText className="w-6 h-6" />
                       </div>
                       <p>Analyze your text to see grammar issues</p>
+                    </div>
+                  )}
+                </div>
+                
+                <div className="glass-panel p-8">
+                  <h3 className="text-xl font-medium text-edumate-900 mb-6">Pronunciation</h3>
+                  {audioBase64 ? (
+                    <div className="flex items-center space-x-4">
+                      <audio controls src={`data:audio/mp3;base64,${audioBase64}`} className="w-full">
+                        Your browser does not support the audio element.
+                      </audio>
+                    </div>
+                  ) : (
+                    <div className="text-center py-12 text-slate-400">
+                      <div className="w-12 h-12 rounded-full bg-slate-100 flex items-center justify-center mx-auto mb-3">
+                        <Volume2 className="w-6 h-6" />
+                      </div>
+                      <p>Analyze your text to hear pronunciation</p>
                     </div>
                   )}
                 </div>

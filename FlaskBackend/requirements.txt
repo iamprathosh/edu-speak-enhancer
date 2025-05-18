@@ -10,3 +10,4 @@ Flask-Limiter
 Werkzeug
 googletrans
 language-tool-python
+google-cloud-vision
