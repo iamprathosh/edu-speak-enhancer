@@ -1,4 +1,3 @@
-
 import { useState } from 'react';
 import { checkGrammar, processImage, GrammarCorrection } from '@/services/grammarService';
 import { useToast } from '@/hooks/use-toast';

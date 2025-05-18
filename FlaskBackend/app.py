@@ -1069,3 +1069,98 @@ def summarize_concept_api():
         logger.error(f"Error in summarize_concept_api: {str(e)}")
         logger.error(traceback.format_exc())
         return jsonify({'error': f'Server error: {str(e)}'}), 500
+
+
+@app.route('/api/grammar-check-image', methods=['POST'])
+@limiter.limit("10 per minute")
+@login_required
+def grammar_check_image():
+    user_id = session.get('user_id')
+    logger.info(f"User {user_id} requesting /api/grammar-check-image")
+
+    if vision_client is None:
+        logger.error("Google Cloud Vision client not initialized")
+        return jsonify({'error': 'Image analysis service unavailable'}), 503
+
+    if tts_client is None:
+        logger.error("Google Cloud TTS client not initialized")
+        return jsonify({'error': 'Text-to-speech service unavailable'}), 503
+
+    if 'image' not in request.files:
+        logger.warning("No image file provided in request")
+        return jsonify({'error': 'No image file provided'}), 400
+
+    image_file = request.files['image']
+    filename = secure_filename(image_file.filename if image_file.filename else "uploaded_image.jpg")
+
+    try:
+        image_bytes = image_file.read()
+        logger.info(f"Image file received: {filename}, size: {len(image_bytes)} bytes for user {user_id}")
+
+        # Add to history
+        add_user_history(user_id, 'grammar_check_image', {'filename': filename, 'size': len(image_bytes)})
+
+        if not image_bytes:
+            logger.warning("Image file is empty after reading from request.")
+            return jsonify({'error': 'Image file is empty or could not be read from the request.'}), 400
+
+        image = vision.Image(content=image_bytes)
+        response = vision_client.text_detection(image=image)
+
+        if response.error.message:
+            logger.error(f"Google Vision API error: {response.error.message}")
+            return jsonify({'error': f'Image analysis API error: {response.error.message}'}), 500
+
+        if not response.text_annotations:
+            logger.warning("No text detected in the image.")
+            return jsonify({'error': 'No text detected in the image.'}), 400
+
+        extracted_text = response.text_annotations[0].description
+        logger.info(f"Extracted text from image: {extracted_text[:100]}...")
+
+        # Use the existing grammar check functionality
+        grammar_data = {'text': extracted_text}
+        grammar_response = grammar_check()
+        if grammar_response.status_code != 200:
+            logger.error(f"Grammar check failed: {grammar_response.get_json()}")
+            return grammar_response
+
+        grammar_corrections = grammar_response.get_json()
+        logger.info(f"Grammar corrections: {grammar_corrections}")
+
+        # Generate pronunciation audio for the extracted text
+        synthesis_input = texttospeech.SynthesisInput(text=extracted_text)
+        voice = texttospeech.VoiceSelectionParams(
+            language_code='en-US',
+            ssml_gender=texttospeech.SsmlVoiceGender.NEUTRAL
+        )
+        audio_config = texttospeech.AudioConfig(
+            audio_encoding=texttospeech.AudioEncoding.MP3
+        )
+
+        tts_response = tts_client.synthesize_speech(
+            input=synthesis_input,
+            voice=voice,
+            audio_config=audio_config
+        )
+
+        if not tts_response.audio_content:
+            logger.error("No audio content in Google TTS response")
+            return jsonify({'error': 'No audio generated'}), 500
+
+        audio_base64 = base64.b64encode(tts_response.audio_content).decode('utf-8')
+        logger.info("Successfully generated pronunciation audio")
+
+        return jsonify({
+            'extracted_text': extracted_text,
+            'grammar_corrections': grammar_corrections,
+            'audio_base64': audio_base64
+        })
+
+    except exceptions.GoogleAPICallError as e:
+        logger.error(f"Google API call error: {str(e)}")
+        return jsonify({'error': f'Google API call error: {str(e)}'}), 500
+    except Exception as e:
+        logger.error(f"Unexpected error during grammar check from image: {str(e)}")
+        logger.error(traceback.format_exc())
+        return jsonify({'error': f'An unexpected internal server error occurred during analysis.'}), 500
