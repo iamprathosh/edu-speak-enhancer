@@ -33,5 +33,13 @@
                 }
             }
         ]
+    },
+    "guru": {
+        "password_hash": "scrypt:32768:8:1$2R1jhVtAPZQu2TOT$a70b454ec4caa0543c78a9db1eda7c207e0bf2c39832e40e24c0f72a28005d72a786a5f2a109f94866710f6bfed3678b4e902108001f6e99481cedd0ce5599f5",
+        "history": []
+    },
+    "admin": {
+        "password_hash": "scrypt:32768:8:1$9LGBphOaexbDO8uz$ea3aa6f5118a0d4b69457edaecc81ab454442cf73bd77aee06fd2bf38befe029f789095c8cd8fb4e71565954cfdc4e91fa6de74a4fd6522ad1715d5fa3f94cc8",
+        "history": []
     }
 }
