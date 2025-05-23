@@ -2,10 +2,27 @@
  * Configuration file for backend API settings
  */
 
-// Base URL for API requests - change this for different environments
-export const API_BASE_URL = process.env.NODE_ENV === 'production' 
-  ? 'http://localhost:5000' // Production API URL (changed from api.edumate.app)
-  : 'http://localhost:5000';   // Local development API URL
+// Function to determine the API base URL
+export const getBaseApiUrl = () => {
+  // Check if we're running in the All-Hands environment
+  if (typeof window !== 'undefined' && window.location.hostname.includes('prod-runtime.all-hands.dev')) {
+    // Use the same hostname but with port 12001 for the backend
+    const hostname = window.location.hostname;
+    const protocol = window.location.protocol;
+    // Replace the port in the URL (work-1 is frontend, work-2 is backend)
+    const backendUrl = `${protocol}//${hostname.replace('work-1', 'work-2')}`;
+    console.log('Detected All-Hands environment, using backend URL:', backendUrl);
+    return backendUrl;
+  }
+  
+  // Default URLs for different environments
+  return process.env.NODE_ENV === 'production' 
+    ? 'http://localhost:12001' // Production API URL
+    : 'http://localhost:12001'; // Local development API URL
+};
+
+// Base URL for API requests
+export const API_BASE_URL = getBaseApiUrl();
 
 // Helper function to get full API URL
 export const getApiUrl = (endpoint: string): string => {

@@ -1,3 +1,4 @@
+#!/usr/bin/env python3
 import nltk
 import os
 import logging
@@ -48,11 +49,26 @@ load_dotenv()
 # Initialize Flask app
 app = Flask(__name__, static_folder='static')
 app.config['SECRET_KEY'] = os.environ.get('FLASK_SECRET_KEY', 'your_very_secret_key_here_change_me') # Added SECRET_KEY for sessions
-app.config['SESSION_COOKIE_SAMESITE'] = 'Lax' # Explicitly set for development
-app.config['SESSION_COOKIE_SECURE'] = False # Explicitly set for HTTP development
 # Get allowed origins from environment variable or use defaults
-ALLOWED_ORIGINS = os.environ.get('ALLOWED_ORIGINS', 'http://localhost:8080,http://127.0.0.1:8080')
-CORS(app, resources={r"/api/*": {"origins": ALLOWED_ORIGINS.split(',')}}, supports_credentials=True) # Ensure frontend origin is allowed and credentials supported
+ALLOWED_ORIGINS = os.environ.get('ALLOWED_ORIGINS', 'http://localhost:8080,http://127.0.0.1:8080,http://localhost:12000,http://localhost:12001,https://work-1-rkchufmaqiboxvpl.prod-runtime.all-hands.dev,https://work-2-rkchufmaqiboxvpl.prod-runtime.all-hands.dev')
+
+# Check if we're running in the All-Hands environment
+is_all_hands = any('prod-runtime.all-hands.dev' in origin for origin in ALLOWED_ORIGINS.split(','))
+
+# Configure session cookies
+app.config['SESSION_COOKIE_SAMESITE'] = 'None'  # Allow cross-site cookies for authentication
+app.config['SESSION_COOKIE_SECURE'] = is_all_hands  # Use secure cookies in production/All-Hands
+
+# Configure CORS to allow credentials and all origins in the list
+CORS(app, 
+     resources={r"/*": {
+         "origins": ALLOWED_ORIGINS.split(','),
+         "supports_credentials": True,
+         "allow_headers": ["Content-Type", "Authorization", "X-Requested-With"],
+         "expose_headers": ["Content-Type", "Authorization"],
+         "methods": ["GET", "POST", "PUT", "DELETE", "OPTIONS"]
+     }},
+     supports_credentials=True)  # Allow necessary headers and methods
 
 # User data store
 USERS_FILE = os.path.join(os.path.dirname(__file__), 'users.json')
@@ -106,12 +122,23 @@ def test_page():
 def login_required(f):
     @wraps(f)
     def decorated_function(*args, **kwargs):
-        logger.info(f"login_required: Auth check TEMPORARILY BYPASSED. Current session: {dict(session)}")
+        logger.info(f"login_required: Checking authentication. Current session: {dict(session)}")
         logger.info(f"login_required: Request cookies: {request.cookies}")
-        # if 'user_id' not in session: # <--- Temporarily commented out
-        #     logger.warning(f"login_required: 'user_id' not in session. Access denied.")
-        #     return jsonify({'error': 'Authentication required'}), 401
-        # logger.info(f"login_required: 'user_id' found: {session.get('user_id', 'N/A')}. Access granted (bypass active).")
+        logger.info(f"login_required: Request headers: {dict(request.headers)}")
+        
+        if 'user_id' not in session:
+            logger.warning(f"login_required: 'user_id' not in session. Access denied.")
+            return jsonify({'error': 'Authentication required'}), 401
+            
+        # Verify the user exists in our database
+        users = load_users()
+        user_id = session.get('user_id')
+        if user_id not in users:
+            logger.warning(f"login_required: User '{user_id}' not found in database. Access denied.")
+            session.pop('user_id', None)  # Clear invalid session
+            return jsonify({'error': 'Invalid user session'}), 401
+            
+        logger.info(f"login_required: 'user_id' found: {user_id}. Access granted.")
         return f(*args, **kwargs)
     return decorated_function
 
@@ -171,16 +198,18 @@ def logout():
 def me():
     user_id = session.get('user_id')
     
-    if not user_id:
-        logger.info("/api/me: No user_id in session (auth bypass active). Returning mock user.")
-        return jsonify({'username': 'mockuser', 'history_count': 0, 'isMock': True}), 200
-
+    # Since login_required decorator is now active, we should always have a user_id
     users = load_users()
     user_data = users.get(user_id)
-    if not user_data: # Should not happen if @login_required works and user exists in users.json
+    if not user_data:
         logger.error(f"/api/me: User {user_id} found in session but not in users.json. This is a data consistency issue.")
         return jsonify({'error': 'User data not found after authentication'}), 404
-    return jsonify({'username': user_id, 'history_count': len(user_data.get('history', []))}), 200
+    
+    # Log the response for debugging
+    response_data = {'username': user_id, 'history_count': len(user_data.get('history', []))}
+    logger.info(f"/api/me: Returning user data: {response_data}")
+    
+    return jsonify(response_data), 200
 
 # --- History Management ---
 def add_user_history(username, feature, details):
@@ -1061,3 +1090,55 @@ def summarize_concept_api():
         logger.error(f"Error in summarize_concept_api: {str(e)}")
         logger.error(traceback.format_exc())
         return jsonify({'error': f'Server error: {str(e)}'}), 500
+
+# Add a root endpoint to handle direct access to the Flask server
+@app.route('/', methods=['GET'])
+def root():
+    """Root endpoint that redirects to the frontend or returns API info."""
+    return jsonify({
+        'api': 'EduSpeak Enhancer API',
+        'version': '1.0.0',
+        'status': 'running',
+        'endpoints': ['/api/health', '/api/login', '/api/register', '/api/logout', '/api/me']
+    })
+
+# Add a health check endpoint
+@app.route('/api/health', methods=['GET'])
+def api_health_check():
+    """Health check endpoint to verify the API is running and its services."""
+    try:
+        # Check if we can load users (basic file system check)
+        users = load_users()
+        
+        # Check if TTS service is available
+        tts_available = False
+        try:
+            # Just check if we can create a client - don't make an actual API call
+            texttospeech.TextToSpeechClient()
+            tts_available = True
+        except Exception as e:
+            logger.warning(f"TTS service check failed: {str(e)}")
+        
+        # Return health status
+        return jsonify({
+            'status': 'ok',
+            'timestamp': datetime.datetime.now().isoformat(),
+            'services': {
+                'tts': 'available' if tts_available else 'unavailable',
+                'auth': 'available'  # Auth is always available as it's file-based
+            },
+            'environment': 'all-hands' if is_all_hands else 'development'
+        }), 200
+    except Exception as e:
+        logger.error(f"Health check failed: {str(e)}")
+        return jsonify({
+            'status': 'error',
+            'error': str(e),
+            'timestamp': datetime.datetime.now().isoformat()
+        }), 500
+
+# Run the Flask app if this file is executed directly
+if __name__ == "__main__":
+    port = int(os.environ.get("PORT", 12001))
+    app.run(host="0.0.0.0", port=port, debug=True)
+

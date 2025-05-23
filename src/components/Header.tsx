@@ -15,6 +15,7 @@ const navLinks = [
 	{ href: '/speech-error', label: 'Speech Error Analysis', icon: <MessageSquareText className="h-5 w-5" /> },
 	{ href: '/grammar-check', label: 'Grammar Check', icon: <BookText className="h-5 w-5" /> },
 	{ href: '/concept-summarization', label: 'Concept Summarization', icon: <BookText className="h-5 w-5" /> },
+	{ href: '/chorus', label: 'Chorus', icon: <BookText className="h-5 w-5" /> },
 	// Add other main feature links here
 ];
 
@@ -70,8 +71,7 @@ export function Header() {
 				return '/concept-summarization';
 			case 'tts_google':
 			case 'texttospeech_custom':
-				// These might not have a dedicated page to link back to, or you might decide on one
-				return '/'; // Default to home or a relevant page
+				return '/chorus'; // Now these features link to the chorus page
 			default:
 				return '/';
 		}
