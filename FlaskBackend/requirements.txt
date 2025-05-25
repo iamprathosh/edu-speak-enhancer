@@ -151,7 +151,7 @@ terminado==0.18.1
 threadpoolctl==3.6.0
 tinycss2==1.4.0
 toml==0.10.2
-torch==2.6.0+cpu
+torch
 tornado==6.4.2
 tqdm==4.67.1
 traitlets==5.14.3
@@ -168,3 +168,4 @@ webencodings==0.5.1
 websocket-client==1.8.0
 Werkzeug==3.1.3
 wrapt==1.17.2
+PyPDF2==3.0.1

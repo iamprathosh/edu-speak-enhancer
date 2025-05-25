@@ -1,0 +1,14 @@
+version: '3.8'
+services:
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    ports:
+      - "12000:12000"
+      - "12001:12001"
+    volumes:
+      - nltk_data:/root/nltk_data
+
+volumes:
+  nltk_data:

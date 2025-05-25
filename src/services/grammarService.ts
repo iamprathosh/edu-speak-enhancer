@@ -46,12 +46,67 @@ export const checkGrammar = (text: string): Promise<GrammarCorrection[]> => {
 };
 
 // Simulate OCR (Optical Character Recognition) for uploaded images
-export const processImage = (imageFile: File): Promise<string> => {
-  return new Promise((resolve) => {
-    // Simulate backend processing time
-    setTimeout(() => {
-      // In a real implementation, this would extract text from the image
-      resolve("I have recieved your letter last week and I will response as soon as possible. Me and my team are working hardly on this project.");
-    }, 2000);
-  });
+export const processImage = async (imageFile: File): Promise<string> => {
+  const formData = new FormData();
+  formData.append('file', imageFile);
+
+  try {
+    const response = await fetch(getApiUrl('/api/extract-text-from-image'), {
+      method: 'POST',
+      body: formData,
+      credentials: 'include',
+    });
+
+    if (!response.ok) {
+      const errorData = await response.json().catch(() => ({ error: 'Failed to extract text from image. Invalid server response.' }));
+      throw new Error(errorData.error || `Failed to extract text from image. Status: ${response.status}`);
+    }
+
+    const data = await response.json();
+    if (typeof data.text === 'string') {
+      return data.text;
+    } else {
+      throw new Error('Invalid text data received from image processing.');
+    }
+  } catch (error) {
+    console.error('Error processing image:', error);
+    if (error instanceof Error) {
+      throw error;
+    }
+    throw new Error('An unknown error occurred while processing the image.');
+  }
+};
+
+// Function to process PDF files and extract text
+export const processPdf = async (pdfFile: File): Promise<string> => {
+  const formData = new FormData();
+  formData.append('file', pdfFile);
+
+  try {
+    const response = await fetch(getApiUrl('/api/extract-text-from-pdf'), {
+      method: 'POST',
+      body: formData,
+      credentials: 'include',
+      // Note: Don't set 'Content-Type': 'multipart/form-data' manually for FormData.
+      // The browser will set it correctly along with the boundary.
+    });
+
+    if (!response.ok) {
+      const errorData = await response.json().catch(() => ({ error: 'Failed to extract text from PDF. Invalid server response.' }));
+      throw new Error(errorData.error || `Failed to extract text from PDF. Status: ${response.status}`);
+    }
+
+    const data = await response.json();
+    if (typeof data.text === 'string') {
+      return data.text;
+    } else {
+      throw new Error('Invalid text data received from PDF processing.');
+    }
+  } catch (error) {
+    console.error('Error processing PDF:', error);
+    if (error instanceof Error) {
+      throw error; // Re-throw the original error if it's already an Error instance
+    }
+    throw new Error('An unknown error occurred while processing the PDF.');
+  }
 };

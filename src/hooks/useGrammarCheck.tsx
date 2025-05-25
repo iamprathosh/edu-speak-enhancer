@@ -1,6 +1,5 @@
-
-import { useState } from 'react';
-import { checkGrammar, processImage, GrammarCorrection } from '@/services/grammarService';
+import { useState, useRef } from 'react';
+import { checkGrammar, processImage, GrammarCorrection, processPdf } from '@/services/grammarService';
 import { useToast } from '@/hooks/use-toast';
 
 export const useGrammarCheck = () => {
@@ -69,6 +68,44 @@ export const useGrammarCheck = () => {
       setIsProcessing(false);
     }
   };
+
+  // Placeholder for PDF processing - to be implemented
+  const uploadPdf = async (file: File) => {
+    setIsProcessing(true);
+    try {
+      // Call a new service function for PDF processing, similar to processImage
+      const extractedText = await processPdf(file); 
+      setTextInput(extractedText);
+      setIsAnalyzed(false); // Reset analysis state
+      setCorrections([]); // Clear previous corrections
+
+      toast({
+        title: "PDF Processed",
+        description: "Text has been extracted from your PDF.",
+      });
+
+      // Optionally, auto-analyze the extracted text from PDF
+      // const result = await checkGrammar(extractedText);
+      // setCorrections(result);
+      // setIsAnalyzed(true);
+      // toast({
+      //   title: "Analysis Complete",
+      //   description: `Found ${result.length} grammar issue${result.length === 1 ? '' : 's'}.`,
+      // });
+
+    } catch (error) {
+      console.error("Error processing PDF:", error);
+      toast({
+        title: "PDF Processing Failed",
+        description: error instanceof Error ? error.message : "Could not extract text from your PDF. Please try again.",
+        variant: "destructive"
+      });
+      // Ensure textInput is cleared or handled if PDF processing fails significantly
+      // setTextInput(""); 
+    } finally {
+      setIsProcessing(false);
+    }
+  };
   
   const resetAnalysis = () => {
     setIsAnalyzed(false);
@@ -99,6 +136,7 @@ export const useGrammarCheck = () => {
     isProcessing,
     analyzeText,
     uploadImage,
+    uploadPdf, // Add uploadPdf to returned values
     resetAnalysis,
     correctedText
   };

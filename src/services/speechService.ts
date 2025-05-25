@@ -18,13 +18,11 @@ export interface Voice {
 }
 
 // Available voices for text-to-speech
-export const availableVoices: Voice[] = [
-  { id: 'en-US-1', name: 'Matthew', gender: 'male', accent: 'American' },
-  { id: 'en-US-2', name: 'Olivia', gender: 'female', accent: 'American' },
-  { id: 'en-GB-1', name: 'James', gender: 'male', accent: 'British' },
-  { id: 'en-GB-2', name: 'Emma', gender: 'female', accent: 'British' },
-  { id: 'en-AU-1', name: 'Jack', gender: 'male', accent: 'Australian' },
-  { id: 'en-AU-2', name: 'Charlotte', gender: 'female', accent: 'Australian' }
+// This 'availableVoices' mock is likely superseded by fetchAvailableVoices,
+// but kept for reference or if used elsewhere directly.
+export const googleVoices: Voice[] = [
+  { id: 'en-US-Studio-M', name: 'Studio M (Male, US)', accent: 'American', gender: 'Male' },
+  { id: 'en-US-Studio-O', name: 'Studio O (Female, US)', accent: 'American', gender: 'Female' },
 ];
 
 // Mock phrases for practice
@@ -56,21 +54,6 @@ export const analyzeSpeech = (duration: number): Promise<SpeechFeedback> => {
   });
 };
 
-// Google TTS voices
-export const googleVoices = [
-  { id: 'en-US-Wavenet-A', name: 'Wavenet A', accent: 'American', gender: 'Male' },
-  { id: 'en-US-Wavenet-B', name: 'Wavenet B', accent: 'American', gender: 'Male' },
-  { id: 'en-US-Wavenet-C', name: 'Wavenet C', accent: 'American', gender: 'Female' },
-  { id: 'en-US-Wavenet-D', name: 'Wavenet D', accent: 'American', gender: 'Male' },
-  { id: 'en-US-Wavenet-E', name: 'Wavenet E', accent: 'American', gender: 'Female' },
-  { id: 'en-US-Wavenet-F', name: 'Wavenet F', accent: 'American', gender: 'Female' },
-  { id: 'en-GB-Wavenet-A', name: 'Wavenet A', accent: 'British', gender: 'Female' },
-  { id: 'en-GB-Wavenet-B', name: 'Wavenet B', accent: 'British', gender: 'Male' },
-  { id: 'en-GB-Wavenet-C', name: 'Wavenet C', accent: 'British', gender: 'Female' },
-  { id: 'en-AU-Wavenet-A', name: 'Wavenet A', accent: 'Australian', gender: 'Female' },
-  { id: 'en-AU-Wavenet-B', name: 'Wavenet B', accent: 'Australian', gender: 'Male' },
-  { id: 'en-IN-Wavenet-A', name: 'Wavenet A', accent: 'Indian', gender: 'Female' },
-];
 
 // Get audio from Google TTS API via our backend
 export const getGoogleTTSAudio = async (text: string, voiceId: string, speed: number): Promise<Blob> => {
@@ -93,6 +76,7 @@ export const getGoogleTTSAudio = async (text: string, voiceId: string, speed: nu
         voiceId: voiceId,
         speed
       }),
+      credentials: 'include', // Add credentials include
     });
     
     if (!response.ok) {
@@ -143,10 +127,8 @@ export const getCustomTTSAudio = async (text: string): Promise<string> => {
     console.log('Backend connectivity check result:', isConnected);
     
     if (!isConnected) {
-      console.error('Backend connectivity check failed');
-      throw new Error(
-        `Cannot connect to the speech server. Please make sure the Flask backend is running at ${getApiUrl('')}`
-      );
+      console.error('Backend not connected, cannot fetch custom TTS audio.');
+      throw new Error('Backend not connected');
     }
 
     console.log('Making request to custom TTS API...');
@@ -159,6 +141,7 @@ export const getCustomTTSAudio = async (text: string): Promise<string> => {
         'Content-Type': 'application/json',
       },
       body: JSON.stringify({ text }),
+      credentials: 'include', // Add credentials include
     });
     
     console.log('Response status:', response.status, response.statusText);
@@ -196,28 +179,39 @@ export const getCustomTTSAudio = async (text: string): Promise<string> => {
 // Fetch available voices from API
 export const fetchAvailableVoices = async (): Promise<Voice[]> => {
   try {
-    const response = await fetch(getApiUrl('/api/voices'));
+    const response = await fetch(getApiUrl('/api/voices'), {
+      method: 'GET',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      credentials: 'include',
+    });
     
     if (!response.ok) {
-      let errorMessage = `Failed with status: ${response.status}`;
+      console.error(`Error fetching voices, status: ${response.status} ${response.statusText}. Falling back to default voices.`);
       try {
-        const errorData = await response.json();
-        errorMessage = errorData.error || JSON.stringify(errorData);
-      } catch (jsonError) {
-         try {
-          const textError = await response.text();
-          if (textError) {
-            errorMessage = textError;
-          }
-        } catch (textErrorErr) { }
+        const errorBody = await response.json();
+        console.error("Error body from /api/voices:", errorBody);
+      } catch (e) {
+        // Ignore if error body isn't json or doesn't exist
       }
-      throw new Error(errorMessage.substring(0, 200));
+      return googleVoices;
     }
     
-    return await response.json();
+    const data = await response.json();
+    // Check if data has a 'voices' property and if it's an array
+    if (data && Array.isArray(data.voices)) {
+      return data.voices;
+    } else if (Array.isArray(data)) { // Fallback for previous direct array response
+      return data; // Assuming 'data' itself is the array of voices
+    }
+    // If data is not in the expected format, log a warning and fall back to default voices
+    console.warn('Unexpected data format from /api/voices. Expected { voices: [] } or []. Falling back to default voices.', data);
+    return googleVoices;
+
   } catch (error) {
-    console.error('Error fetching voices:', error);
-    // Fall back to predefined voices if API call fails
+    console.error('Failed to fetch available voices:', error);
+    // Fallback to googleVoices in case of any error during fetch
     return googleVoices;
   }
 };

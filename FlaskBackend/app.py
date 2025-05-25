@@ -20,7 +20,7 @@ from werkzeug.utils import secure_filename
 # uuid # Original comment
 from googletrans import Translator
 from werkzeug.security import generate_password_hash, check_password_hash # Added for password hashing
-# datetime # Original comment
+import datetime # Ensure datetime is imported
 from functools import wraps # Added for decorators
 
 import logging
@@ -33,6 +33,7 @@ import base64
 import google.generativeai as genai
 import language_tool_python # Ensure this is actively imported if lang_tool is used
 import nltk # Ensure nltk is imported if its submodules are used directly after download
+import PyPDF2 # Added for PDF processing
 
 # --- Configuration and Initialization (Same as previous, with additions) ---
 
@@ -50,25 +51,34 @@ load_dotenv()
 app = Flask(__name__, static_folder='static')
 app.config['SECRET_KEY'] = os.environ.get('FLASK_SECRET_KEY', 'your_very_secret_key_here_change_me') # Added SECRET_KEY for sessions
 # Get allowed origins from environment variable or use defaults
-ALLOWED_ORIGINS = os.environ.get('ALLOWED_ORIGINS', 'http://localhost:8080,http://127.0.0.1:8080,http://localhost:12000,http://localhost:12001,https://work-1-rkchufmaqiboxvpl.prod-runtime.all-hands.dev,https://work-2-rkchufmaqiboxvpl.prod-runtime.all-hands.dev')
+ALLOWED_ORIGINS_STR = os.environ.get('ALLOWED_ORIGINS', 'http://localhost:8080,http://127.0.0.1:8080,http://localhost:12000,http://127.0.0.1:12000,http://localhost:12001,https://work-1-rkchufmaqiboxvpl.prod-runtime.all-hands.dev,https://work-2-rkchufmaqiboxvpl.prod-runtime.all-hands.dev')
+ALLOWED_ORIGINS = [origin.strip() for origin in ALLOWED_ORIGINS_STR.split(',')]
+
 
 # Check if we're running in the All-Hands environment
-is_all_hands = any('prod-runtime.all-hands.dev' in origin for origin in ALLOWED_ORIGINS.split(','))
+# is_all_hands = any('prod-runtime.all-hands.dev' in origin for origin in ALLOWED_ORIGINS) # This can be simplified by relying on app.debug
 
-# Configure session cookies
-app.config['SESSION_COOKIE_SAMESITE'] = 'None'  # Allow cross-site cookies for authentication
-app.config['SESSION_COOKIE_SECURE'] = is_all_hands  # Use secure cookies in production/All-Hands
+# Configure session cookies based on debug mode
+# Ensure app.debug is set before this point, typically by FLASK_DEBUG env var or app.run(debug=True)
+# For the purpose of this configuration, we assume app.debug reflects the environment.
+# If FLASK_DEBUG is set, app.debug will be true/false accordingly.
+# If running via app.run(debug=True/False), that will also set app.debug.
+
+if os.environ.get("FLASK_ENV") == "development" or os.environ.get("FLASK_DEBUG") == "1": # A common way to check if in development/debug
+    app.config['SESSION_COOKIE_SAMESITE'] = 'Lax'  # More permissive for HTTP local dev
+    app.config['SESSION_COOKIE_SECURE'] = False
+else:
+    app.config['SESSION_COOKIE_SAMESITE'] = 'None' # Required for cross-site contexts (e.g., iframes, different subdomains)
+    app.config['SESSION_COOKIE_SECURE'] = True     # 'None' requires Secure=True
 
 # Configure CORS to allow credentials and all origins in the list
 CORS(app, 
-     resources={r"/*": {
-         "origins": ALLOWED_ORIGINS.split(','),
-         "supports_credentials": True,
-         "allow_headers": ["Content-Type", "Authorization", "X-Requested-With"],
-         "expose_headers": ["Content-Type", "Authorization"],
-         "methods": ["GET", "POST", "PUT", "DELETE", "OPTIONS"]
-     }},
-     supports_credentials=True)  # Allow necessary headers and methods
+     origins=ALLOWED_ORIGINS,
+     supports_credentials=True,
+     allow_headers=["Content-Type", "Authorization", "X-Requested-With", "Cache-Control"], # Added "Cache-Control"
+     expose_headers=["Content-Type", "Authorization"],
+     methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"]
+)
 
 # User data store
 USERS_FILE = os.path.join(os.path.dirname(__file__), 'users.json')
@@ -108,7 +118,7 @@ def save_users(users_data):
 limiter = Limiter(
     get_remote_address,
     app=app,
-    default_limits=["200 per day", "50 per hour"],  # Example limits
+    default_limits=["200 per day", "500 per hour"],  # Example limits
     storage_uri="memory://",  # Use in-memory storage; consider Redis for production
 )
 
@@ -437,15 +447,28 @@ def text_to_speech_google(): # Renamed to avoid conflict
             logger.warning("Missing or empty 'text' field in request")
             return jsonify({'error': 'Text is required'}), 400
 
-        # Add to history
-        add_user_history(user_id, 'tts_google', {'text_length': len(text), 'voice_id': data.get('voiceId')})
+        # Determine voice_id for American accents
+        ALLOWED_AMERICAN_VOICES = ['en-US-Studio-M', 'en-US-Studio-O']
+        requested_voice_id_from_client = data.get('voiceId')
 
-        voice_id = data.get('voiceId', 'en-US-Standard-D')  # Default
+        if requested_voice_id_from_client and requested_voice_id_from_client in ALLOWED_AMERICAN_VOICES:
+            voice_id = requested_voice_id_from_client
+            logger.info(f"Using client-requested valid American voice for /api/tts_google: {voice_id}")
+        elif requested_voice_id_from_client:
+            logger.warning(f"Client for /api/tts_google requested voice \'{requested_voice_id_from_client}\', which is not in the allowed list {ALLOWED_AMERICAN_VOICES}. Defaulting to {ALLOWED_AMERICAN_VOICES[0]}.")
+            voice_id = ALLOWED_AMERICAN_VOICES[0]  # Default to the first allowed voice
+        else:  # No voiceId provided by client
+            logger.info(f"No voiceId provided by client for /api/tts_google. Defaulting to {ALLOWED_AMERICAN_VOICES[0]}.")
+            voice_id = ALLOWED_AMERICAN_VOICES[0]  # Default to the first allowed voice
+        
+        # Add to history with the finalized voice_id and what client requested
+        add_user_history(user_id, 'tts_google', {'text_length': len(text), 'used_voice_id': voice_id, 'requested_voice_id': requested_voice_id_from_client})
+
         # Log parsed parameters
-        logger.info(f"TTS parameters - Text length: {len(text)}, Voice ID: {voice_id}")
+        logger.info(f"TTS parameters for /api/tts_google - Text length: {len(text)}, Voice ID used: {voice_id}")
 
         try:
-            speed = float(data.get('speed', 2.0))
+            speed = float(data.get('speed', 1.0)) # Default speed to 1.0 if not specified
             if speed < 0.25 or speed > 4.0:
                 logger.warning(f"Speed value out of range: {speed}. Received: {data.get('speed')}")
                 return jsonify({'error': 'Speed must be between 0.25 and 4.0'}), 400
@@ -494,8 +517,8 @@ def text_to_speech_google(): # Renamed to avoid conflict
             return send_file(
                 audio_buffer,
                 mimetype="audio/mpeg",
-                as_attachment=True,
-                download_name="speech.mp3"
+                as_attachment=False,  # Changed to False for inline playback
+                download_name="speech.mp3"  # download_name is less relevant when as_attachment is False
             )
 
         except exceptions.GoogleAPICallError as e:
@@ -641,7 +664,7 @@ Transcript:
     except Exception as e:
         logger.error(f"Unexpected error during speech error analysis: {str(e)}")
         logger.error(traceback.format_exc())
-        return jsonify({'error': f'Unexpected error during speech error analysis: {str(e)}'}), 500 # MODIFIED
+        return jsonify({'error': f'Unexpected error during speech error analysis: {str(e)}'}), 500
 
 
 @app.route('/api/texttospeech', methods=['POST'])
@@ -649,7 +672,7 @@ Transcript:
 @login_required # Protect this endpoint
 def text_to_speech_custom():
     user_id = session.get('user_id') # Get current user
-    logger.info(f"User {user_id} requesting /api/texttospeech (Multi-language TTS)")
+    logger.info(f"User {user_id} requesting /api/texttospeech (Indian Accent TTS)")
     # Log the request headers for debugging
     logger.info(f"Request headers: {dict(request.headers)}")
     
@@ -671,98 +694,49 @@ def text_to_speech_custom():
             return jsonify({'error': 'Text is required'}), 400
 
         # Add to history
-        add_user_history(user_id, 'texttospeech_custom', {'text_length': len(text)})
+        add_user_history(user_id, 'texttospeech_indian_accent', {'text_length': len(text)})
 
-        logger.info(f"Processing text for TTS: '{text}' for user {user_id}")
-        words = text.split(' ')
-        logger.info(f"Split into {len(words)} words")
+        logger.info(f"Processing text for Indian Accent TTS: '{text}' for user {user_id}")
         
         # Create an in-memory bytes buffer for the MP3 data
         mp3_fp = io.BytesIO()
         
-        # Group words by language for better performance
-        current_lang = None
-        current_group = []
-        lang_groups = []
-        
-        for word in words:
-            if not word.strip():  # Skip empty strings
-                continue
-                
-            detected_lang = detect_language_for_word(word)
+        try:
+            # Use Google Cloud TTS to synthesize speech for the entire text
+            synthesis_input = texttospeech.SynthesisInput(text=text)
             
-            # If language changes or this is the first word, start a new group
-            if detected_lang != current_lang:
-                if current_group:
-                    lang_groups.append((current_lang, ' '.join(current_group)))
-                current_lang = detected_lang
-                current_group = [word]
-            else:
-                current_group.append(word)
-        
-        # Add the last group if it exists
-        if current_group:
-            lang_groups.append((current_lang, ' '.join(current_group)))
-        
-        logger.info(f"Grouped text into {len(lang_groups)} language segments")
-        groups_processed = 0
-        
-        # Map language codes to ones supported by Google Cloud TTS
-        lang_code_map = {
-            'en': 'en-US',
-            'fr': 'fr-FR',
-            'es': 'es-ES',
-            'de': 'de-DE'
-        }
-        
-        for lang, text_segment in lang_groups:
-            try:
-                google_lang_code = lang_code_map.get(lang, 'en-US')
-                
-                # Use Google Cloud TTS to synthesize speech for the entire segment
-                synthesis_input = texttospeech.SynthesisInput(text=text_segment)
-                
-                # Select a voice appropriate for the language
-                voice = texttospeech.VoiceSelectionParams(
-                    language_code=google_lang_code,
-                    ssml_gender=texttospeech.SsmlVoiceGender.NEUTRAL
-                )
-                
-                # Configure audio settings
-                audio_config = texttospeech.AudioConfig(
-                    audio_encoding=texttospeech.AudioEncoding.MP3
-                )
-                
-                # Make the API call for the whole segment
-                logger.info(f"Calling Google TTS API for segment in language {google_lang_code}: '{text_segment[:50]}...'")
-                response = tts_client.synthesize_speech(
-                    input=synthesis_input,
-                    voice=voice,
-                    audio_config=audio_config
-                )
-                
-                # Write the audio content to our buffer
-                mp3_fp.write(response.audio_content)
-                groups_processed += 1
-                
-            except exceptions.GoogleAPICallError as e:
-                logger.error(f"Google API call error for segment '{text_segment[:50]}...': {str(e)}")
-                if groups_processed == 0:
-                    return jsonify({'error': f'Text-to-speech API error: {str(e)}'}), 500
-                continue
-            except Exception as e:
-                logger.error(f"Error generating TTS for segment in lang '{lang}': {e}")
-                logger.error(traceback.format_exc())
-                
-                if groups_processed == 0:
-                    return jsonify({'error': f'Failed to generate speech. Error: {str(e)}'}), 500
-                logger.warning(f"Skipping segment and continuing with the rest of the text")
-                continue
-        
-        # If we haven't processed any groups successfully, return an error
-        if groups_processed == 0:
-            logger.error("No language segments were successfully processed")
-            return jsonify({'error': 'Failed to generate speech for any parts of the text'}), 500
+            # Select an Indian English voice
+            # Other options: en-IN-Wavenet-B (Male), en-IN-Wavenet-C (Female), en-IN-Wavenet-D (Male)
+            # Or Neural2 voices like en-IN-Neural2-A (Female)
+            voice = texttospeech.VoiceSelectionParams(
+                language_code='en-IN',
+                name='en-IN-Wavenet-A' # Female Indian English voice
+            )
+            
+            # Configure audio settings
+            audio_config = texttospeech.AudioConfig(
+                audio_encoding=texttospeech.AudioEncoding.MP3
+                # Add speaking_rate here if you want to control speed, e.g., speaking_rate=1.0
+            )
+            
+            # Make the API call for the whole text
+            logger.info(f"Calling Google TTS API for text with Indian accent: '{text[:50]}...'")
+            response = tts_client.synthesize_speech(
+                input=synthesis_input,
+                voice=voice,
+                audio_config=audio_config
+            )
+            
+            # Write the audio content to our buffer
+            mp3_fp.write(response.audio_content)
+            
+        except exceptions.GoogleAPICallError as e:
+            logger.error(f"Google API call error for text '{text[:50]}...': {str(e)}")
+            return jsonify({'error': f'Text-to-speech API error: {str(e)}'}), 500
+        except Exception as e:
+            logger.error(f"Error generating TTS for text: {e}")
+            logger.error(traceback.format_exc())
+            return jsonify({'error': f'Failed to generate speech. Error: {str(e)}'}), 500
         
         # Rewind the buffer to the beginning to read the data
         mp3_fp.seek(0)
@@ -771,7 +745,7 @@ def text_to_speech_custom():
         # Encode the audio data to base64
         audio_base64 = base64.b64encode(audio_bytes).decode('utf-8')
         
-        logger.info(f"Successfully generated and encoded multi-language TTS audio, size: {len(audio_base64)} bytes")
+        logger.info(f"Successfully generated and encoded TTS audio with Indian accent, size: {len(audio_base64)} bytes")
         response = jsonify({'audio_base64': audio_base64})
         
         # Log the response headers for debugging
@@ -779,7 +753,7 @@ def text_to_speech_custom():
         return response
 
     except Exception as e:
-        logger.error(f"Unhandled error in custom text_to_speech_custom function: {str(e)}", exc_info=True)
+        logger.error(f"Unhandled error in text_to_speech_custom function: {str(e)}", exc_info=True)
         return jsonify({'error': f'Server error: {str(e)}'}), 500
 
 
@@ -990,155 +964,98 @@ def grammar_check():
         except Exception as e:
             logger.error(f"Error during LanguageTool grammar check: {str(e)}")
             logger.error(traceback.format_exc())
-            return jsonify({"error": "Error processing with LanguageTool"}), 500
+            # No further fallback if both Gemini and LanguageTool fail or are unavailable
+            # The frontend will receive an empty list of corrections or an error from earlier.
     else:
-        logger.warning("No grammar check tool (Gemini or LanguageTool) is available.")
-        return jsonify({"error": "Grammar check service not available"}), 503
+        # This case means neither Gemini nor LanguageTool is available.
+        logger.error("Grammar check service unavailable: Neither Gemini nor LanguageTool is initialized.")
+        return jsonify({'error': 'Grammar check service completely unavailable.'}), 503
 
+    logger.info(f"Returning {len(corrections)} grammar corrections.")
     return jsonify(corrections)
 
+@app.route('/api/extract-text-from-pdf', methods=['POST'])
+@login_required
+def extract_text_from_pdf():
+    user_id = session.get('user_id')
+    logger.info(f"User {user_id} requesting /api/extract-text-from-pdf")
 
-@app.route('/api/summarize_concept', methods=['POST'])
-@limiter.limit("5 per minute") # Example: 5 requests per minute
-@login_required # Protect this endpoint
-def summarize_concept_api():
-    user_id = session.get('user_id') # Get current user
-    logger.info(f"User {user_id} requesting /api/summarize_concept")
-    if not gemini_available or gemini_model is None:
-        logger.error("Gemini API not available for summarization.")
-        return jsonify({'error': 'Summarization service unavailable due to Gemini API issue'}), 503
+    if 'file' not in request.files:
+        logger.warning("No file part in request for PDF extraction")
+        return jsonify({'error': 'No file part'}), 400
 
-    try:
-        data = request.get_json()
-        concept_text = data.get('text') # Changed 'concept' to 'text'
-        target_audience = data.get('audience', 'general') # Default to general audience
-        compression_level = data.get('level', 'medium')  # Default to medium
+    file = request.files['file']
+    if file.filename == '':
+        logger.warning("No selected file for PDF extraction")
+        return jsonify({'error': 'No selected file'}), 400
 
-        if not concept_text: # Changed 'concept' to 'concept_text'
-            return jsonify({'error': 'No text provided for summarization'}), 400
-
-        # Add to history
-        add_user_history(user_id, 'summarize_concept', {'concept_length': len(concept_text), 'audience': target_audience, 'level': compression_level}) # Changed 'concept' to 'concept_text'
-
-        # Tailor the prompt based on compression level
-        if compression_level == 'high':
-            prompt = f"""Summarize the following concept text concisely for a {target_audience} audience. Identify up to 5 key concepts. Suggest 3-4 focus points for learning and 3-4 related topics.
-            Concept: "{concept_text}"
-            Format your response as a JSON object with keys "summary", "keyConcepts" (list of strings), "learningEnhancement" (an object with "focusPoints" and "suggestedRelatedTopics" as lists of strings).
-            Ensure the summary is very short and highly compressed.
-            """
-        elif compression_level == 'low':
-            prompt = f"""Provide a detailed summary of the following concept text for a {target_audience} audience. Identify 7-10 key concepts. Suggest 5-6 focus points for learning and 5-6 related topics.
-            Concept: "{concept_text}"
-            Format your response as a JSON object with keys "summary", "keyConcepts" (list of strings), "learningEnhancement" (an object with "focusPoints" and "suggestedRelatedTopics" as lists of strings).
-            Ensure the summary is comprehensive and less compressed.
-            """
-        else:  # Medium compression
-            prompt = f"""Summarize the following concept text for a {target_audience} audience. Identify 5-7 key concepts. Suggest 4-5 focus points for learning and 4-5 related topics.
-            Concept: "{concept_text}"
-            Format your response as a JSON object with keys "summary", "keyConcepts" (list of strings), "learningEnhancement" (an object with "focusPoints" and "suggestedRelatedTopics" as lists of strings).
-            The summary should be balanced in detail.
-            """
-
-        logger.info(f"Generating summary with Gemini. Compression: {compression_level}. Concept length: {len(concept_text)}")
-        response = gemini_model.generate_content(prompt)
-
-        # Attempt to parse the response as JSON
+    if file and file.filename.endswith('.pdf'):
         try:
-            # It's common for the API to return markdown with a JSON block.
-            # We need to extract the JSON part.
-            response_text = response.text
-            # Find the start and end of the JSON block
-            json_start_index = response_text.find('{')
-            json_end_index = response_text.rfind('}') + 1
-
-            if json_start_index != -1 and json_end_index != -1:
-                json_string = response_text[json_start_index:json_end_index]
-                summary_data = json.loads(json_string)
-                logger.info("Successfully parsed Gemini response as JSON.")
-            else:
-                logger.error(f"Could not find JSON in Gemini response: {response_text}")
-                # Fallback: try to create a basic summary if JSON parsing fails
-                summary_data = {
-                    "summary": response_text, # Use the whole text as summary
-                    "keyConcepts": ["Could not extract key concepts"],
-                    "learningEnhancement": {
-                        "focusPoints": ["Unable to determine focus points"],
-                        "suggestedRelatedTopics": ["Unable to determine related topics"]
-                    }
-                }
-
-        except json.JSONDecodeError as e:
-            logger.error(f"Failed to parse Gemini response as JSON: {str(e)}. Response text: {response.text}")
-            # Fallback if JSON parsing fails
-            summary_data = {
-                "summary": response.text, # Use the whole text as summary
-                "keyConcepts": ["Failed to parse key concepts from model output"],
-                "learningEnhancement": {
-                    "focusPoints": ["Failed to parse focus points"],
-                    "suggestedRelatedTopics": ["Failed to parse related topics"]
-                }
-            }
-        except Exception as e: # Catch other potential errors with the response object
-            logger.error(f"Error processing Gemini response: {str(e)}. Response: {response}")
-            return jsonify({'error': f'Error processing Gemini response: {str(e)}'}), 500
-
-
-        return jsonify(summary_data)
-
-    except Exception as e:
-        logger.error(f"Error in summarize_concept_api: {str(e)}")
-        logger.error(traceback.format_exc())
-        return jsonify({'error': f'Server error: {str(e)}'}), 500
-
-# Add a root endpoint to handle direct access to the Flask server
-@app.route('/', methods=['GET'])
-def root():
-    """Root endpoint that redirects to the frontend or returns API info."""
-    return jsonify({
-        'api': 'EduSpeak Enhancer API',
-        'version': '1.0.0',
-        'status': 'running',
-        'endpoints': ['/api/health', '/api/login', '/api/register', '/api/logout', '/api/me']
-    })
-
-# Add a health check endpoint
-@app.route('/api/health', methods=['GET'])
-def api_health_check():
-    """Health check endpoint to verify the API is running and its services."""
-    try:
-        # Check if we can load users (basic file system check)
-        users = load_users()
-        
-        # Check if TTS service is available
-        tts_available = False
-        try:
-            # Just check if we can create a client - don't make an actual API call
-            texttospeech.TextToSpeechClient()
-            tts_available = True
+            pdf_reader = PyPDF2.PdfReader(io.BytesIO(file.read()))
+            text = ""
+            for page_num in range(len(pdf_reader.pages)):
+                page = pdf_reader.pages[page_num]
+                text += page.extract_text() or "" # Add empty string if extract_text returns None
+            
+            add_user_history(user_id, 'extract_text_from_pdf', {'filename': secure_filename(file.filename), 'text_length': len(text)})
+            logger.info(f"Successfully extracted {len(text)} characters from PDF: {secure_filename(file.filename)}")
+            return jsonify({'text': text}), 200
         except Exception as e:
-            logger.warning(f"TTS service check failed: {str(e)}")
-        
-        # Return health status
-        return jsonify({
-            'status': 'ok',
-            'timestamp': datetime.datetime.now().isoformat(),
-            'services': {
-                'tts': 'available' if tts_available else 'unavailable',
-                'auth': 'available'  # Auth is always available as it's file-based
-            },
-            'environment': 'all-hands' if is_all_hands else 'development'
-        }), 200
-    except Exception as e:
-        logger.error(f"Health check failed: {str(e)}")
-        return jsonify({
-            'status': 'error',
-            'error': str(e),
-            'timestamp': datetime.datetime.now().isoformat()
-        }), 500
+            logger.error(f"Error processing PDF file {secure_filename(file.filename)}: {str(e)}", exc_info=True)
+            return jsonify({'error': f'Could not process PDF file: {str(e)}'}), 500
+    else:
+        logger.warning(f"Invalid file type for PDF extraction: {secure_filename(file.filename)}")
+        return jsonify({'error': 'Invalid file type, please upload a PDF'}), 400
 
-# Run the Flask app if this file is executed directly
-if __name__ == "__main__":
-    port = int(os.environ.get("PORT", 12001))
-    app.run(host="0.0.0.0", port=port, debug=True)
+@app.route('/api/extract-text-from-image', methods=['POST'])
+@login_required
+def extract_text_from_image():
+    user_id = session.get('user_id')
+    logger.info(f"User {user_id} requesting /api/extract-text-from-image")
+
+    if vision_client is None:
+        logger.error("Google Cloud Vision client not initialized for image text extraction")
+        return jsonify({'error': 'Image text extraction service unavailable'}), 503
+
+    if 'file' not in request.files:
+        logger.warning("No file part in request for image extraction")
+        return jsonify({'error': 'No file part'}), 400
+
+    file = request.files['file']
+    if file.filename == '':
+        logger.warning("No selected file for image extraction")
+        return jsonify({'error': 'No selected file'}), 400
+
+    if file:
+        try:
+            content = file.read()
+            image = vision.Image(content=content)
+            
+            logger.info(f"Sending image {secure_filename(file.filename)} to Google Vision API for text detection.")
+            response = vision_client.text_detection(image=image)
+            texts = response.text_annotations
+
+            extracted_text = ""
+            if texts:
+                extracted_text = texts[0].description # The first annotation is the full text
+            
+            if response.error.message:
+                logger.error(f"Google Vision API error for {secure_filename(file.filename)}: {response.error.message}")
+                raise Exception(response.error.message)
+
+            add_user_history(user_id, 'extract_text_from_image', {'filename': secure_filename(file.filename), 'text_length': len(extracted_text)})
+            logger.info(f"Successfully extracted {len(extracted_text)} characters from image: {secure_filename(file.filename)}")
+            return jsonify({'text': extracted_text}), 200
+        except Exception as e:
+            logger.error(f"Error processing image file {secure_filename(file.filename)}: {str(e)}", exc_info=True)
+            return jsonify({'error': f'Could not process image file: {str(e)}'}), 500
+    else:
+        # This case should ideally be caught by earlier checks, but as a safeguard.
+        logger.warning("File object is None or invalid for image extraction.")
+        return jsonify({'error': 'Invalid file provided'}), 400
+
+# --- Main Execution ---
+if __name__ == '__main__':
+    port = int(os.environ.get("FLASK_PORT", 12001)) # Changed default to 12001 and added FLASK_PORT env var
+    app.run(host="0.0.0.0", port=12001, debug=True)
 

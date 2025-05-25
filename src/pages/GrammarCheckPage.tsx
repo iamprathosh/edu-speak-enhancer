@@ -4,25 +4,63 @@ import { Header } from '@/components/Header.tsx';
 import { useGrammarCheck } from '@/hooks/useGrammarCheck';
 import { useToast } from '@/hooks/use-toast';
 import { LoadingIndicator } from '@/components/ui/loading-indicator';
+import { useRef } from 'react';
 
 const GrammarCheckPage = () => {
   const { 
     textInput, 
-    setTextInput, 
+    setTextInput, // setTextInput is available from the hook but not directly used by handleFileUpload
     corrections, 
     isAnalyzed, 
     isProcessing,
     analyzeText,
     uploadImage,
+    uploadPdf, 
     correctedText
   } = useGrammarCheck();
   
   const { toast } = useToast();
+
+  const handleFileUpload = async (event: React.ChangeEvent<HTMLInputElement>, fileType: 'image' | 'pdf') => {
+    const file = event.target.files?.[0];
+    if (file) {
+      try {
+        // The hook functions (uploadImage, uploadPdf) already call setTextInput.
+        if (fileType === 'image') {
+          await uploadImage(file);
+        } else if (fileType === 'pdf') {
+          await uploadPdf(file);
+        }
+        // setTextInput is handled by the hook functions.
+        toast({
+          title: "File Uploaded",
+          description: `Your ${fileType} has been processed and text extracted.`,
+        });
+      } catch (error) {
+        console.error(`Error processing ${fileType}:`, error);
+        toast({
+          title: `Error Processing ${fileType === 'image' ? 'Image' : 'PDF'}`,
+          description: `There was an error processing your ${fileType}. Please try again.`,
+          variant: "destructive",
+        });
+      }
+    }
+  };
   
-  const handleImageUpload = () => {
-    // Simulate file selection with a mock file
-    const mockFile = new File([""], "sample-image.jpg", { type: "image/jpeg" });
-    uploadImage(mockFile);
+  const handleImageUploadClick = () => {
+    const input = document.createElement('input');
+    input.type = 'file';
+    input.accept = 'image/*';
+    input.onchange = (e) => handleFileUpload(e as unknown as React.ChangeEvent<HTMLInputElement>, 'image');
+    input.click();
+  };
+
+  const handlePdfUploadClick = () => {
+    const input = document.createElement('input');
+    input.type = 'file';
+    input.accept = '.pdf';
+    input.onchange = (e) => handleFileUpload(e as unknown as React.ChangeEvent<HTMLInputElement>, 'pdf');
+    input.click();
   };
   
   const handleCopyText = () => {
@@ -88,7 +126,7 @@ const GrammarCheckPage = () => {
                   <h3 className="text-xl font-medium text-edumate-900">Input Text</h3>
                   <div className="flex space-x-2">
                     <button 
-                      onClick={handleImageUpload}
+                      onClick={handleImageUploadClick} 
                       disabled={isProcessing}
                       className={`p-2 text-slate-600 hover:text-edumate-600 hover:bg-edumate-50 rounded-lg transition-colors ${
                         isProcessing ? 'opacity-50 cursor-not-allowed' : ''
@@ -98,6 +136,7 @@ const GrammarCheckPage = () => {
                       <Camera className="w-5 h-5" />
                     </button>
                     <button 
+                      onClick={handlePdfUploadClick} 
                       disabled={isProcessing}
                       className={`p-2 text-slate-600 hover:text-edumate-600 hover:bg-edumate-50 rounded-lg transition-colors ${
                         isProcessing ? 'opacity-50 cursor-not-allowed' : ''

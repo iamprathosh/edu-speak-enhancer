@@ -60,11 +60,11 @@ export const checkBackendConnectivity = async (): Promise<boolean> => {
       method: 'GET',
       signal: controller.signal,
       // Ensure we're not affected by browser caching
-      headers: {
-        'Cache-Control': 'no-cache, no-store, must-revalidate',
-        'Pragma': 'no-cache',
-        'Expires': '0'
-      }
+      // headers: {
+      //   'Cache-Control': 'no-cache, no-store, must-revalidate',
+      //   'Pragma': 'no-cache',
+      //   'Expires': '0'
+      // }
     });
     
     clearTimeout(timeoutId);

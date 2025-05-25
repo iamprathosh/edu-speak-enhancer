@@ -41,5 +41,508 @@
     "admin": {
         "password_hash": "scrypt:32768:8:1$9LGBphOaexbDO8uz$ea3aa6f5118a0d4b69457edaecc81ab454442cf73bd77aee06fd2bf38befe029f789095c8cd8fb4e71565954cfdc4e91fa6de74a4fd6522ad1715d5fa3f94cc8",
         "history": []
+    },
+    "ad": {
+        "password_hash": "scrypt:32768:8:1$VtEwsYRBL8r5hqOf$f3135861774b3f915ae184e278bdd819ef94dde4e7d371e94112a2374eb6535b8e99e426ffacd82050e12d292891f56a19c12a5def40736ec870512c14034894",
+        "history": [
+            {
+                "timestamp": "2025-05-23T17:04:17.632663Z",
+                "feature": "grammar_check",
+                "details": {
+                    "text_length": 129
+                }
+            },
+            {
+                "timestamp": "2025-05-23T17:21:09.427339Z",
+                "feature": "texttospeech_custom",
+                "details": {
+                    "text_length": 20
+                }
+            },
+            {
+                "timestamp": "2025-05-23T17:21:13.718083Z",
+                "feature": "texttospeech_custom",
+                "details": {
+                    "text_length": 20
+                }
+            },
+            {
+                "timestamp": "2025-05-23T17:21:17.135089Z",
+                "feature": "texttospeech_custom",
+                "details": {
+                    "text_length": 20
+                }
+            },
+            {
+                "timestamp": "2025-05-23T17:21:21.811311Z",
+                "feature": "texttospeech_custom",
+                "details": {
+                    "text_length": 20
+                }
+            },
+            {
+                "timestamp": "2025-05-23T17:21:31.657709Z",
+                "feature": "texttospeech_custom",
+                "details": {
+                    "text_length": 20
+                }
+            },
+            {
+                "timestamp": "2025-05-23T17:25:50.485413Z",
+                "feature": "tts_google",
+                "details": {
+                    "text_length": 14,
+                    "voice_id": "en-US-Wavenet-A"
+                }
+            },
+            {
+                "timestamp": "2025-05-23T17:25:57.928350Z",
+                "feature": "tts_google",
+                "details": {
+                    "text_length": 14,
+                    "voice_id": "en-US-Wavenet-A"
+                }
+            },
+            {
+                "timestamp": "2025-05-23T17:26:07.423336Z",
+                "feature": "tts_google",
+                "details": {
+                    "text_length": 14,
+                    "voice_id": "en-US-Wavenet-A"
+                }
+            },
+            {
+                "timestamp": "2025-05-23T17:38:07.054984Z",
+                "feature": "tts_google",
+                "details": {
+                    "text_length": 14,
+                    "voice_id": "en-US-Casual-K"
+                }
+            },
+            {
+                "timestamp": "2025-05-23T17:38:11.929465Z",
+                "feature": "tts_google",
+                "details": {
+                    "text_length": 14,
+                    "voice_id": "en-US-Casual-K"
+                }
+            },
+            {
+                "timestamp": "2025-05-23T17:42:37.157881Z",
+                "feature": "tts_google",
+                "details": {
+                    "text_length": 14,
+                    "voice_id": "en-US-Casual-K"
+                }
+            },
+            {
+                "timestamp": "2025-05-23T17:42:58.900662Z",
+                "feature": "tts_google",
+                "details": {
+                    "text_length": 14,
+                    "voice_id": "en-US-Wavenet-A"
+                }
+            },
+            {
+                "timestamp": "2025-05-23T17:43:33.569552Z",
+                "feature": "tts_google",
+                "details": {
+                    "text_length": 14,
+                    "voice_id": "en-US-Wavenet-A"
+                }
+            },
+            {
+                "timestamp": "2025-05-23T17:46:30.290472Z",
+                "feature": "tts_google",
+                "details": {
+                    "text_length": 14,
+                    "voice_id": "en-US-Wavenet-A"
+                }
+            },
+            {
+                "timestamp": "2025-05-23T17:49:19.735072Z",
+                "feature": "tts_google",
+                "details": {
+                    "text_length": 14,
+                    "voice_id": "en-US-Casual-K"
+                }
+            },
+            {
+                "timestamp": "2025-05-23T17:54:44.517470Z",
+                "feature": "tts_google",
+                "details": {
+                    "text_length": 20,
+                    "voice_id": "am-ET-Wavenet-A"
+                }
+            },
+            {
+                "timestamp": "2025-05-23T17:54:50.516675Z",
+                "feature": "tts_google",
+                "details": {
+                    "text_length": 20,
+                    "voice_id": "am-ET-Wavenet-A"
+                }
+            },
+            {
+                "timestamp": "2025-05-23T17:56:53.653575Z",
+                "feature": "tts_google",
+                "details": {
+                    "text_length": 20,
+                    "voice_id": "de-DE-Studio-B"
+                }
+            },
+            {
+                "timestamp": "2025-05-23T17:56:58.600811Z",
+                "feature": "tts_google",
+                "details": {
+                    "text_length": 20,
+                    "voice_id": "de-DE-Studio-B"
+                }
+            },
+            {
+                "timestamp": "2025-05-23T17:57:04.449671Z",
+                "feature": "tts_google",
+                "details": {
+                    "text_length": 20,
+                    "voice_id": "de-DE-Studio-B"
+                }
+            },
+            {
+                "timestamp": "2025-05-23T18:04:25.258627Z",
+                "feature": "tts_google",
+                "details": {
+                    "text_length": 14,
+                    "voice_id": "de-DE-Studio-B"
+                }
+            },
+            {
+                "timestamp": "2025-05-23T18:04:30.183137Z",
+                "feature": "tts_google",
+                "details": {
+                    "text_length": 14,
+                    "voice_id": "de-DE-Studio-B"
+                }
+            },
+            {
+                "timestamp": "2025-05-23T18:08:43.007767Z",
+                "feature": "tts_google",
+                "details": {
+                    "text_length": 14,
+                    "voice_id": "de-DE-Studio-B"
+                }
+            },
+            {
+                "timestamp": "2025-05-23T18:08:56.673432Z",
+                "feature": "tts_google",
+                "details": {
+                    "text_length": 14,
+                    "voice_id": "de-DE-Studio-B"
+                }
+            },
+            {
+                "timestamp": "2025-05-23T18:09:02.728447Z",
+                "feature": "tts_google",
+                "details": {
+                    "text_length": 14,
+                    "voice_id": "de-DE-Studio-B"
+                }
+            },
+            {
+                "timestamp": "2025-05-23T18:10:53.381571Z",
+                "feature": "tts_google",
+                "details": {
+                    "text_length": 14,
+                    "voice_id": "de-DE-Studio-B"
+                }
+            },
+            {
+                "timestamp": "2025-05-23T18:11:04.893056Z",
+                "feature": "tts_google",
+                "details": {
+                    "text_length": 14,
+                    "voice_id": "de-DE-Studio-B"
+                }
+            },
+            {
+                "timestamp": "2025-05-23T18:11:07.610517Z",
+                "feature": "tts_google",
+                "details": {
+                    "text_length": 14,
+                    "voice_id": "de-DE-Studio-B"
+                }
+            },
+            {
+                "timestamp": "2025-05-23T18:12:08.128667Z",
+                "feature": "tts_google",
+                "details": {
+                    "text_length": 14,
+                    "voice_id": "de-DE-Studio-B"
+                }
+            },
+            {
+                "timestamp": "2025-05-23T18:12:10.705873Z",
+                "feature": "tts_google",
+                "details": {
+                    "text_length": 14,
+                    "voice_id": "de-DE-Studio-B"
+                }
+            },
+            {
+                "timestamp": "2025-05-23T18:12:22.949134Z",
+                "feature": "grammar_check",
+                "details": {
+                    "text_length": 129
+                }
+            },
+            {
+                "timestamp": "2025-05-23T18:21:29.244433Z",
+                "feature": "extract_text_from_pdf",
+                "details": {
+                    "filename": "resume_1.pdf",
+                    "text_length": 3066
+                }
+            },
+            {
+                "timestamp": "2025-05-23T18:21:34.610457Z",
+                "feature": "grammar_check",
+                "details": {
+                    "text_length": 3066
+                }
+            },
+            {
+                "timestamp": "2025-05-23T18:22:46.659075Z",
+                "feature": "extract_text_from_image",
+                "details": {
+                    "filename": "Sample-handwritten-text-input-for-OCR.png",
+                    "text_length": 56
+                }
+            },
+            {
+                "timestamp": "2025-05-23T18:22:47.184746Z",
+                "feature": "grammar_check",
+                "details": {
+                    "text_length": 56
+                }
+            },
+            {
+                "timestamp": "2025-05-24T07:21:33.937264Z",
+                "feature": "grammar_check",
+                "details": {
+                    "text_length": 129
+                }
+            },
+            {
+                "timestamp": "2025-05-24T07:25:05.209968Z",
+                "feature": "grammar_check",
+                "details": {
+                    "text_length": 129
+                }
+            },
+            {
+                "timestamp": "2025-05-24T07:26:13.005516Z",
+                "feature": "extract_text_from_image",
+                "details": {
+                    "filename": "Sample-handwritten-text-input-for-OCR.png",
+                    "text_length": 56
+                }
+            },
+            {
+                "timestamp": "2025-05-24T07:26:13.552877Z",
+                "feature": "grammar_check",
+                "details": {
+                    "text_length": 56
+                }
+            },
+            {
+                "timestamp": "2025-05-24T07:26:40.981859Z",
+                "feature": "extract_text_from_pdf",
+                "details": {
+                    "filename": "optimized_resume.pdf",
+                    "text_length": 2975
+                }
+            },
+            {
+                "timestamp": "2025-05-24T07:26:45.404807Z",
+                "feature": "grammar_check",
+                "details": {
+                    "text_length": 2975
+                }
+            },
+            {
+                "timestamp": "2025-05-24T07:28:05.246755Z",
+                "feature": "tts_google",
+                "details": {
+                    "text_length": 14,
+                    "voice_id": "de-DE-Studio-B"
+                }
+            },
+            {
+                "timestamp": "2025-05-24T07:28:22.593739Z",
+                "feature": "tts_google",
+                "details": {
+                    "text_length": 1862,
+                    "voice_id": "de-DE-Studio-B"
+                }
+            },
+            {
+                "timestamp": "2025-05-24T07:30:51.917114Z",
+                "feature": "tts_google",
+                "details": {
+                    "text_length": 1862,
+                    "voice_id": "de-DE-Studio-B"
+                }
+            },
+            {
+                "timestamp": "2025-05-24T07:30:55.657437Z",
+                "feature": "tts_google",
+                "details": {
+                    "text_length": 1862,
+                    "voice_id": "de-DE-Studio-B"
+                }
+            },
+            {
+                "timestamp": "2025-05-24T07:31:28.098310Z",
+                "feature": "tts_google",
+                "details": {
+                    "text_length": 179,
+                    "voice_id": "de-DE-Studio-B"
+                }
+            },
+            {
+                "timestamp": "2025-05-24T07:31:54.445400Z",
+                "feature": "tts_google",
+                "details": {
+                    "text_length": 467,
+                    "voice_id": "de-DE-Studio-B"
+                }
+            },
+            {
+                "timestamp": "2025-05-24T07:35:31.674837Z",
+                "feature": "tts_google",
+                "details": {
+                    "text_length": 467,
+                    "voice_id": "de-DE-Studio-B"
+                }
+            },
+            {
+                "timestamp": "2025-05-24T07:37:36.342247Z",
+                "feature": "tts_google",
+                "details": {
+                    "text_length": 467,
+                    "voice_id": "de-DE-Studio-B"
+                }
+            },
+            {
+                "timestamp": "2025-05-24T07:39:49.072209Z",
+                "feature": "tts_google",
+                "details": {
+                    "text_length": 467,
+                    "voice_id": "de-DE-Studio-B"
+                }
+            },
+            {
+                "timestamp": "2025-05-24T07:39:58.794887Z",
+                "feature": "tts_google",
+                "details": {
+                    "text_length": 467,
+                    "voice_id": "de-DE-Studio-B"
+                }
+            },
+            {
+                "timestamp": "2025-05-24T07:48:55.002124Z",
+                "feature": "tts_google",
+                "details": {
+                    "text_length": 467,
+                    "voice_id": "de-DE-Studio-B"
+                }
+            },
+            {
+                "timestamp": "2025-05-24T07:49:27.545095Z",
+                "feature": "tts_google",
+                "details": {
+                    "text_length": 467,
+                    "used_voice_id": "en-US-Studio-M",
+                    "requested_voice_id": "de-DE-Studio-B"
+                }
+            },
+            {
+                "timestamp": "2025-05-24T07:49:29.584529Z",
+                "feature": "tts_google",
+                "details": {
+                    "text_length": 467,
+                    "used_voice_id": "en-US-Studio-M",
+                    "requested_voice_id": "de-DE-Studio-B"
+                }
+            },
+            {
+                "timestamp": "2025-05-24T07:51:06.200636Z",
+                "feature": "tts_google",
+                "details": {
+                    "text_length": 467,
+                    "used_voice_id": "en-US-Studio-M",
+                    "requested_voice_id": "de-DE-Studio-B"
+                }
+            },
+            {
+                "timestamp": "2025-05-25T08:19:36.895938Z",
+                "feature": "tts_google",
+                "details": {
+                    "text_length": 191,
+                    "used_voice_id": "en-US-Studio-M",
+                    "requested_voice_id": "de-DE-Studio-B"
+                }
+            },
+            {
+                "timestamp": "2025-05-25T08:19:58.472635Z",
+                "feature": "grammar_check",
+                "details": {
+                    "text_length": 129
+                }
+            },
+            {
+                "timestamp": "2025-05-25T08:20:57.712255Z",
+                "feature": "extract_text_from_image",
+                "details": {
+                    "filename": "Sample-handwritten-text-input-for-OCR.png",
+                    "text_length": 56
+                }
+            },
+            {
+                "timestamp": "2025-05-25T08:20:57.901215Z",
+                "feature": "grammar_check",
+                "details": {
+                    "text_length": 56
+                }
+            },
+            {
+                "timestamp": "2025-05-25T08:21:20.144625Z",
+                "feature": "extract_text_from_pdf",
+                "details": {
+                    "filename": "optimized_resume.pdf",
+                    "text_length": 2975
+                }
+            },
+            {
+                "timestamp": "2025-05-25T08:21:23.466450Z",
+                "feature": "grammar_check",
+                "details": {
+                    "text_length": 2975
+                }
+            }
+        ]
+    },
+    "yuvasri": {
+        "password_hash": "scrypt:32768:8:1$wGQPIxRpKcgNc6yY$264cf48246ca90474c158d5214fd6969ec05caf7e9b14c36145d3927c248601b64759548a942930cb9e4e7071d5195374aa3db011f478acc77f77a72400c5d54",
+        "history": [
+            {
+                "timestamp": "2025-05-25T08:22:57.129952Z",
+                "feature": "tts_google",
+                "details": {
+                    "text_length": 191,
+                    "used_voice_id": "en-US-Studio-M",
+                    "requested_voice_id": "de-DE-Studio-B"
+                }
+            }
+        ]
     }
 }

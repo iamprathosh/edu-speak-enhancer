@@ -62,18 +62,11 @@ const ChorusPage = () => {
   
   // Fetch available voices when component mounts
   useEffect(() => {
-    const getVoices = async () => {
+    const loadVoices = async () => {
       try {
         setIsLoadingVoices(true);
         const voices = await fetchAvailableVoices();
         setAvailableVoices(voices);
-        
-        // Set a default voice if we got results and don't have one selected yet
-        if (voices.length > 0 && !selectedVoice) {
-          // Try to select a US English voice by default
-          const defaultVoice = voices.find(v => v.id.includes('en-US')) || voices[0];
-          setSelectedVoice(defaultVoice.id);
-        }
       } catch (err) {
         console.error('Failed to fetch voices:', err);
         toast({
@@ -83,16 +76,34 @@ const ChorusPage = () => {
         });
         // Use the mock voices as fallback
         setAvailableVoices(googleVoices as Voice[]);
-        if (googleVoices.length > 0 && !selectedVoice) {
-          setSelectedVoice(googleVoices[0].id);
-        }
       } finally {
         setIsLoadingVoices(false);
       }
     };
     
-    getVoices();
-  }, [selectedVoice]);
+    loadVoices();
+  }, [toast]); // Dependency: toast (assuming it's stable from useToast)
+
+  // Effect to set default voice once availableVoices are loaded or if selectedVoice is cleared
+  useEffect(() => {
+    if (availableVoices.length > 0 && !selectedVoice) {
+      // Prioritize Studio voices
+      const studioVoice = availableVoices.find(v => 
+        v.id.toLowerCase().includes('studio') ||
+        v.name.toLowerCase().includes('studio')
+      );
+      // Fallback to US English voice if no Studio voice is found
+      const usEnglishVoice = availableVoices.find(v => v.id.includes('en-US'));
+      
+      // Determine the default voice: Studio, then US English, then the first available voice
+      const defaultVoice = studioVoice || usEnglishVoice || availableVoices[0];
+      
+      if (defaultVoice) { // Ensure a default voice was found
+        setSelectedVoice(defaultVoice.id);
+        console.log('Default voice set to:', defaultVoice.id, defaultVoice.name);
+      }
+    }
+  }, [availableVoices, selectedVoice]); // Re-run if availableVoices changes or selectedVoice becomes empty
 
   // Check backend connectivity when component mounts
   useEffect(() => {
@@ -191,30 +202,29 @@ const ChorusPage = () => {
     setError("");
     
     try {
-      console.log('Generating speech for text:', inputText);
+      console.log('Generating speech for text:', inputText, 'Voice:', selectedVoice, 'Speed:', speechSpeed);
       
-      // Get the selected voice object (for display purposes)
       const voice = availableVoices.find(v => v.id === selectedVoice);
       
       toast({
         title: "Generating Speech",
-        description: `Using ${voice?.name || 'selected voice'} with language detection`,
+        description: `Using ${voice?.name || 'selected voice'} at ${speechSpeed}x speed`,
       });
       
-      console.log('Calling custom TTS API...');
+      console.log('Calling Google TTS API via speechService...');
       
-      // Call the backend custom TTS API
-      const audioBase64 = await getCustomTTSAudio(inputText);
+      // Call the backend Google TTS API via speechService
+      const audioBlob = await getGoogleTTSAudio(inputText, selectedVoice, speechSpeed);
       
-      console.log('Received base64 audio, length:', audioBase64.length);
+      console.log('Received audio blob');
       
-      // Create audio source from base64 string
-      const audioSrc = `data:audio/mp3;base64,${audioBase64}`;
+      // Create audio source from blob
+      const audioUrl = URL.createObjectURL(audioBlob);
       
       // Play the audio
       if (audioRef.current) {
         console.log('Setting audio source and playing...');
-        audioRef.current.src = audioSrc;
+        audioRef.current.src = audioUrl;
         audioRef.current.oncanplaythrough = async () => {
           try {
             console.log('Audio loaded, playing now');
@@ -230,6 +240,45 @@ const ChorusPage = () => {
         audioRef.current.onended = () => {
           console.log('Audio playback complete');
           setIsPlaying(false);
+          setIsLoading(false); // Also ensure isLoading is false when playback ends
+          URL.revokeObjectURL(audioUrl); // Clean up the object URL
+        };
+
+        // Handle errors during loading
+        audioRef.current.onerror = () => {
+          const mediaError = audioRef.current?.error;
+          console.error('Audio onerror event. MediaError:', mediaError, 'Player state - isPlaying:', isPlaying, 'isLoading:', isLoading, 'readyState:', audioRef.current?.readyState);
+
+          // Only set a user-facing error and stop playback states if the error is critical.
+          if (mediaError &&
+              (mediaError.code === MediaError.MEDIA_ERR_DECODE ||
+               mediaError.code === MediaError.MEDIA_ERR_SRC_NOT_SUPPORTED ||
+               mediaError.code === MediaError.MEDIA_ERR_NETWORK)) {
+
+            let specificErrorMessage = 'Failed to load audio. The format might be unsupported or the file corrupted.';
+            if (mediaError.code === MediaError.MEDIA_ERR_NETWORK) {
+              specificErrorMessage = 'A network error occurred while loading the audio.';
+            } else if (mediaError.code === MediaError.MEDIA_ERR_DECODE) {
+              specificErrorMessage = 'The audio could not be decoded, or the format is unsupported.';
+            } 
+
+            
+            setIsPlaying(false); // Critical error, so stop "playing" state
+            setIsLoading(false); // Loading failed
+            URL.revokeObjectURL(audioUrl); // Clean up
+          } else {
+            // Non-critical error (e.g., null MediaError, MEDIA_ERR_ABORTED).
+            // Log it, but don't set a UI error or prematurely change isPlaying state,
+            // as playback might still proceed or have been intentionally aborted.
+            console.warn('Non-critical audio onerror event. Not setting UI error or altering playback state prematurely.');
+            // Set isLoading to false as the load attempt has concluded, one way or another,
+            // If oncanplaythrough doesn't fire after this, isPlaying might remain true,
+            // but for the case "working good", oncanplaythrough does fire.
+            if(isLoading) { // Check isLoading before setting to avoid unnecessary re-renders
+              setIsLoading(false);
+            }
+            // Do not revoke URL here if it's not a critical error, as oncanplaythrough/onended should handle it.
+          }
         };
       }
     } catch (err) {
@@ -425,7 +474,7 @@ const ChorusPage = () => {
                   <div className="space-y-6">
                     <div className="space-y-4">
                       {Object.entries(feedback)
-                        .filter(([key]) => key !== 'suggestions') // Ensure 'suggestions' is a string array if it exists
+                        .filter(([key]) => key !== 'suggestions') 
                         .map(([key, value]) => (
                           <div key={key} className="space-y-2">
                             <div className="flex justify-between items-center">
@@ -442,32 +491,41 @@ const ChorusPage = () => {
                       ))}
                     </div>
                     
-                    <div>
-                      <h4 className="text-lg font-medium text-edumate-900 mb-3">Suggestions</h4>
-                      <ul className="space-y-2">
-                        {feedback.suggestions.map((suggestionItem, index) => ( // Changed suggestion to suggestionItem
-                          <li key={index} className="flex items-start">
-                            <span className="flex-shrink-0 h-5 w-5 rounded-full bg-edumate-100 flex items-center justify-center mr-2 mt-0.5">
-                              <svg 
-                                xmlns="http://www.w3.org/2000/svg" 
-                                width="12" 
-                                height="12" 
-                                viewBox="0 0 24 24" 
-                                fill="none" 
-                                stroke="currentColor" 
-                                strokeWidth="2" 
-                                strokeLinecap="round" 
-                                strokeLinejoin="round"
-                                className="text-edumate-500"
-                              >
-                                <polyline points="20 6 9 17 4 12"></polyline>
-                              </svg>
-                            </span>
-                            <span className="text-slate-700">{suggestionItem}</span> // Changed suggestion to suggestionItem
-                          </li>
-                        ))}
-                      </ul>
-                    </div>
+                    {feedback.suggestions && Array.isArray(feedback.suggestions) && feedback.suggestions.length > 0 ? (
+                      <div>
+                        <h4 className="text-lg font-medium text-edumate-900 mb-3">Suggestions</h4>
+                        <ul className="space-y-2">
+                          {feedback.suggestions.map((suggestionItem, index) => ( 
+                            <li key={index} className="flex items-start">
+                              <span className="flex-shrink-0 h-5 w-5 rounded-full bg-edumate-100 flex items-center justify-center mr-2 mt-0.5">
+                                <svg 
+                                  xmlns="http://www.w3.org/2000/svg" 
+                                  width="12" 
+                                  height="12" 
+                                  viewBox="0 0 24 24" 
+                                  fill="none" 
+                                  stroke="currentColor" 
+                                  strokeWidth="2" 
+                                  strokeLinecap="round" 
+                                  strokeLinejoin="round"
+                                  className="text-edumate-500"
+                                >
+                                  <polyline points="20 6 9 17 4 12"></polyline>
+                                </svg>
+                              </span>
+                              <span className="text-slate-700">{suggestionItem}</span>
+                            </li>
+                          ))}
+                        </ul>
+                      </div>
+                    ) : (
+                      feedback.suggestions && feedback.suggestions.length === 0 && (
+                        <div>
+                          <h4 className="text-lg font-medium text-edumate-900 mb-3">Suggestions</h4>
+                          <p className="text-slate-600">No specific suggestions at this time. Great job!</p>
+                        </div>
+                      )
+                    )}
                   </div>
                 ) : (
                   <div className="text-center py-12">
