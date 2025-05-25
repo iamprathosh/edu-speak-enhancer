@@ -974,6 +974,100 @@ def grammar_check():
     logger.info(f"Returning {len(corrections)} grammar corrections.")
     return jsonify(corrections)
 
+@app.route('/api/summarize_concept', methods=['POST'])
+@limiter.limit("10 per minute")
+@login_required
+def summarize_concept_endpoint():
+    user_id = session.get('user_id')
+    logger.info(f"User {user_id} requesting /api/summarize_concept")
+
+    if not gemini_available or gemini_model is None:
+        logger.error("Gemini API not available for concept summarization")
+        return jsonify({'error': 'Concept summarization service is currently unavailable due to Gemini API issues.'}), 503
+
+    if not request.is_json:
+        logger.warning("Request for /api/summarize_concept is not JSON")
+        return jsonify({"error": "Request must be JSON"}), 400
+
+    data = request.get_json()
+    text_to_summarize = data.get('text')
+    compression_level = data.get('level', 'medium') # Default to medium
+
+    if not text_to_summarize:
+        logger.warning("No text provided for summarization")
+        return jsonify({"error": "No text provided for summarization"}), 400
+    
+    if not isinstance(text_to_summarize, str):
+        logger.warning("Text for summarization is not a string")
+        return jsonify({"error": "Text must be a string"}), 400
+
+    if compression_level not in ['high', 'medium', 'low']:
+        logger.warning(f"Invalid compression level: {compression_level}")
+        return jsonify({"error": "Invalid compression level. Must be 'high', 'medium', or 'low'."}), 400
+
+    add_user_history(user_id, 'summarize_concept', {'text_length': len(text_to_summarize), 'level': compression_level})
+    logger.info(f"Received concept summarization request for text: '{text_to_summarize[:100]}...' with level: {compression_level}")
+
+    try:
+        prompt = f"""Summarize the following text at a '{compression_level}' compression level.
+Provide the output as a JSON object with the following structure:
+{{
+  "summary": "The summarized text.",
+  "keyConcepts": ["list", "of", "key", "concepts"],
+  "learningEnhancement": {{
+    "focusPoints": ["list", "of", "focus", "points"],
+    "suggestedRelatedTopics": ["list", "of", "suggested", "related", "topics"]
+  }}
+}}
+
+Ensure the "keyConcepts" list contains between 3 to 7 important concepts extracted from the text.
+Ensure the "focusPoints" list contains 2 to 4 points that a learner should focus on.
+Ensure the "suggestedRelatedTopics" list contains 2 to 4 related topics for further learning.
+Do not include any explanations or text outside of the JSON object itself.
+
+Text to summarize:
+{text_to_summarize}
+"""
+        logger.info("Sending request to Gemini for concept summarization.")
+        response = gemini_model.generate_content(prompt)
+        
+        logger.debug(f"Raw Gemini response text for summarization: {response.text}")
+
+        response_text = response.text.strip()
+        # Strip markdown code block if present
+        if response_text.startswith("```json") and response_text.endswith("```"):
+            response_text = response_text[len("```json"):-len("```")].strip()
+        elif response_text.startswith("```") and response_text.endswith("```"): # Handle generic markdown code block
+            response_text = response_text[len("```"):-len("```")].strip()
+
+        if not response_text:
+            logger.error("Gemini response for summarization is empty after stripping markdown.")
+            return jsonify({'error': 'Gemini response was empty after processing.'}), 500
+
+        summary_data = json.loads(response_text)
+
+        # Basic validation of the structure
+        if not isinstance(summary_data, dict) or \
+           'summary' not in summary_data or \
+           'keyConcepts' not in summary_data or not isinstance(summary_data['keyConcepts'], list) or \
+           'learningEnhancement' not in summary_data or not isinstance(summary_data['learningEnhancement'], dict) or \
+           'focusPoints' not in summary_data['learningEnhancement'] or not isinstance(summary_data['learningEnhancement']['focusPoints'], list) or \
+           'suggestedRelatedTopics' not in summary_data['learningEnhancement'] or not isinstance(summary_data['learningEnhancement']['suggestedRelatedTopics'], list):
+            logger.error(f"Gemini response for summarization is not in the expected format: {summary_data}")
+            return jsonify({'error': 'Gemini response for summarization is not in the expected format.'}), 500
+
+        logger.info(f"Successfully processed concept summarization with Gemini. Summary length: {len(summary_data.get('summary', ''))}")
+        return jsonify(summary_data)
+
+    except json.JSONDecodeError as e:
+        logger.error(f"Failed to parse Gemini JSON response for summarization: {e}")
+        logger.error(f"Problematic Gemini response text for summarization (first 500 chars): {response_text[:500]}...")
+        return jsonify({'error': 'Failed to parse Gemini response for summarization as JSON', 'details': str(e)}), 500
+    except Exception as e: 
+        logger.error(f"Gemini API Error or other exception during concept summarization: {str(e)}")
+        logger.error(traceback.format_exc())
+        return jsonify({'error': f'API error during summarization: {str(e)}'}), 500
+
 @app.route('/api/extract-text-from-pdf', methods=['POST'])
 @login_required
 def extract_text_from_pdf():

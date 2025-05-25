@@ -528,6 +528,14 @@
                 "details": {
                     "text_length": 2975
                 }
+            },
+            {
+                "timestamp": "2025-05-25T11:04:15.470165Z",
+                "feature": "summarize_concept",
+                "details": {
+                    "text_length": 318,
+                    "level": "medium"
+                }
             }
         ]
     },
